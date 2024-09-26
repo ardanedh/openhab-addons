@@ -14,11 +14,12 @@ package org.openhab.automation.java223.internal;
 
 import static org.openhab.automation.java223.common.Java223Constants.LIB_DIR;
 
+import java.io.ByteArrayOutputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -130,10 +131,7 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
         scriptWrappingStrategy = new ScriptWrappingStrategy();
 
         try {
-            // copy the helper lib jar
-            InputStream source = getClass().getResourceAsStream("/helper-lib.jar");
-            Path dest = LIB_DIR.resolve("helper-lib.jar");
-            Files.copy(source, dest, StandardCopyOption.REPLACE_EXISTING);
+            copyHelperLibJar();
 
             dependencyGenerator = new DependencyGenerator(LIB_DIR, additionalBundlesConfig, additionalClassesConfig,
                     bundleContext);
@@ -147,7 +145,7 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
             dependencyGenerator.createCoreDependencies();
             watchService.registerListener(classWriter, LIB_DIR);
         } catch (IOException e) {
-            throw new Java223Exception("Cannot create helper class file in library directory", e);
+            throw new Java223Exception("Cannot create helper library / class files in lib directory", e);
         }
 
         this.watchService = watchService;
@@ -155,6 +153,44 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
         watchService.registerListener(java223Strategy, LIB_DIR);
 
         logger.info("Bundle activated");
+    }
+
+    private void copyHelperLibJar() throws Java223Exception, IOException {
+        // get old file :
+        Path dest = LIB_DIR.resolve("helper-lib.jar");
+        byte[] oldHelperLibAsByteArray = new byte[0];
+        if (dest.toFile().exists()) {
+            oldHelperLibAsByteArray = Files.readAllBytes(dest);
+        }
+
+        // get new file :
+        byte[] newHelperLibAsByteArray;
+        try (InputStream source = getClass().getResourceAsStream("/helper-lib.jar")) {
+            if (source != null) {
+                ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+                byte[] buffer = new byte[1024]; // Buffer size
+                int bytesRead;
+                while ((bytesRead = source.read(buffer)) != -1) {
+                    byteArrayOutputStream.write(buffer, 0, bytesRead);
+                }
+                newHelperLibAsByteArray = byteArrayOutputStream.toByteArray();
+            } else {
+                throw new Java223Exception("Cannot read helper lib in java223. Should not happened");
+            }
+        } catch (IOException e) {
+            throw new Java223Exception("Cannot write helper file", e);
+
+        }
+
+        // compare and write only if different
+        if (!Arrays.equals(oldHelperLibAsByteArray, newHelperLibAsByteArray)) {
+            try (FileOutputStream fileOutputStream = new FileOutputStream(dest.toFile())) {
+                ;
+                fileOutputStream.write(newHelperLibAsByteArray);
+            } catch (IOException e) {
+                throw new Java223Exception("Cannot write helper file", e);
+            }
+        }
     }
 
     @Modified
@@ -191,8 +227,6 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
         if (getScriptTypes().contains(scriptType)) {
             JavaScriptEngine engine = new Java223ScriptEngine();
 
-            // needed ? it's from javarule
-            // engine.setExecutionClassLoader(bundleContext.getBundle().adapt(BundleWiring.class).getClassLoader());
             engine.setExecutionStrategyFactory(java223Strategy);
             engine.setBindingStrategy(java223Strategy);
             engine.setPackageResourceListingStrategy(osgiPackageResourceListingStrategy);

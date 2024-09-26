@@ -22,7 +22,7 @@ import java.lang.annotation.Target;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 
 /**
- * The {@link InjectBinding} tags field with an injection intent and related details.
+ * This annotation tags fields with an injection intent and related details.
  *
  * @author Gwendal Roulleau - Initial contribution
  */
@@ -39,7 +39,7 @@ public @interface InjectBinding {
     public boolean enable() default true;
 
     /**
-     * If set, use this name. Else use the variable name.
+     * If set, use this name. Else try to get the name from the code.
      *
      * @return
      */

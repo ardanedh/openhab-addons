@@ -90,6 +90,10 @@ public class DependencyGenerator {
         this.additionalClassesConfig = additionalClassesConfig;
     }
 
+    /**
+     * Generate a JAR with useful classes for a client project.
+     * This JAR is not needed, it's just a facilitator for writing script in another environment.
+     */
     public synchronized void createCoreDependencies() {
         try (FileOutputStream outFile = new FileOutputStream(libDir.resolve(CONVENIENCE_DEPENDENCIES_JAR).toFile())) {
             Manifest manifest = new Manifest();
@@ -166,7 +170,7 @@ public class DependencyGenerator {
                 .map(s -> s.split(";")[0]) // get only package name and drop uses, version, etc.
                 .map(b -> b.replace(".", "/")).collect(Collectors.toList());
         Set<String> dependenciesWithSlash = dependencies.stream().map(b -> b.replace(".", "/"))
-                .collect(Collectors.<String> toSet());
+                .collect(Collectors.<String>toSet());
 
         bundle.adapt(BundleWiring.class).listResources("", "*.class", LISTRESOURCES_LOCAL + LISTRESOURCES_RECURSE)
                 .forEach(classFile -> {

@@ -43,6 +43,13 @@ public class BindingInjector {
 
     private static final Logger logger = LoggerFactory.getLogger(BindingInjector.class);
 
+    /**
+     * Smart injection of bindings value into an object.
+     *
+     * @param bindings a bindings maps with value to inject
+     * @param objectToInjectInto An object. Its fields will be filled with value from the
+     *            bindings, if a match is found
+     */
     public static void injectBindingsInto(Map<String, Object> bindings, Object objectToInjectInto) {
         try {
             injectBindingsInto(bindings, objectToInjectInto, new HashMap<>());
@@ -52,28 +59,6 @@ public class BindingInjector {
         }
     }
 
-    public static @Nullable Object extractBindingValueForElement(Map<String, Object> bindings,
-            AnnotatedElement annotatedElement) {
-        try {
-            return extractBindingValueForElement(bindings, annotatedElement, new HashMap<>());
-        } catch (InstantiationException | IllegalAccessException | IllegalArgumentException
-                | InvocationTargetException e) {
-            throw new Java223Exception("Cannot extract binding value for an element", e);
-        }
-    }
-
-    /**
-     * Inject bindings into objetToInject
-     *
-     * @param bindings a bindings maps with value to inject
-     * @param objectToInject An object. Its fields will be filled with value from the
-     *            bindings, if a match is found
-     * @throws InvocationTargetException
-     * @throws IllegalArgumentException
-     * @throws IllegalAccessException
-     * @throws InstantiationException
-     * @throws ScriptException
-     */
     private static void injectBindingsInto(Map<String, Object> bindings, Object objectToInjectInto,
             Map<Class<?>, Object> libAlreadyInstanciated)
             throws InstantiationException, IllegalAccessException, IllegalArgumentException, InvocationTargetException {
@@ -95,12 +80,17 @@ public class BindingInjector {
      *
      * @param bindings a map where to find the data to inject
      * @param annotatedElement the field/parameter element to inject value into
-     * @param libAlreadyInstanciated A store of library instance, to avoid loop injection
-     * @throws InvocationTargetException
-     * @throws IllegalArgumentException
-     * @throws IllegalAccessException
-     * @throws InstantiationException
      **/
+    public static @Nullable Object extractBindingValueForElement(Map<String, Object> bindings,
+            AnnotatedElement annotatedElement) {
+        try {
+            return extractBindingValueForElement(bindings, annotatedElement, new HashMap<>());
+        } catch (InstantiationException | IllegalAccessException | IllegalArgumentException
+                | InvocationTargetException e) {
+            throw new Java223Exception("Cannot extract binding value for an element", e);
+        }
+    }
+
     @SuppressWarnings({ "null", "unused" })
     private static @Nullable Object extractBindingValueForElement(Map<String, Object> bindings,
             AnnotatedElement annotatedElement, Map<Class<?>, Object> libAlreadyInstanciated)
@@ -172,7 +162,7 @@ public class BindingInjector {
                 if (presetMap != null) {
                     value = presetMap;
                 } else {
-                    logger.warn("Cannot find a preset named {} for the named parameter {}",
+                    logger.warn("Cannot find the preset {} for the named parameter {}",
                             injectBindingAnnotation.preset(), named);
                 }
             } else {
@@ -182,8 +172,16 @@ public class BindingInjector {
 
         // fourth, browse deep inside the object if there is a path to traverse
         while (!namePath.isEmpty()) {
+            if (value == null) {
+                logger.debug("Find null value for the path {}", named);
+                break;
+            }
             if (value instanceof Map<?, ?> elementToParseAsMap) {
-                value = elementToParseAsMap.get(namePath.poll());
+                String key = namePath.poll();
+                value = elementToParseAsMap.get(key);
+                if (value == null) {
+                    logger.debug("Cannot find an element with the key {}", key);
+                }
             } else {
                 Field targetField;
                 try {
@@ -193,12 +191,12 @@ public class BindingInjector {
                         targetField.setAccessible(true);
                         value = targetField.get(value);
                     } else {
-                        logger.debug("Cannot map a value to the path {}", named);
+                        logger.warn("Cannot map a value to the path {}", named);
                         value = null;
                         break;
                     }
                 } catch (NoSuchFieldException | SecurityException e) {
-                    logger.debug("Cannot map a value to the path {}", named);
+                    logger.warn("Cannot map a value to the path {}", named);
                     value = null;
                     break;
                 }
@@ -221,6 +219,18 @@ public class BindingInjector {
         return value;
     }
 
+    /**
+     * Find the appropriate parameters value in the bindings map, for the executable bit of code.
+     *
+     * @param executable
+     * @param bindings The map used to search the appropriate value to inject
+     * @param libAlreadyInstanciated To avoid looping the instantiation of library
+     * @return
+     * @throws InstantiationException
+     * @throws IllegalAccessException
+     * @throws IllegalArgumentException
+     * @throws InvocationTargetException
+     */
     public static Object[] getParameterValuesFor(Executable executable, Map<String, Object> bindings,
             @Nullable Map<Class<?>, Object> libAlreadyInstanciated)
             throws InstantiationException, IllegalAccessException, IllegalArgumentException, InvocationTargetException {

@@ -20,7 +20,7 @@ import java.lang.annotation.Target;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 
 /**
- * The {@link ScriptLoadedTrigger} Run a method when the script is loaded
+ * A method annotated with this will be executed when the script is loaded
  *
  * @author Gwendal Roulleau - Initial contribution
  */

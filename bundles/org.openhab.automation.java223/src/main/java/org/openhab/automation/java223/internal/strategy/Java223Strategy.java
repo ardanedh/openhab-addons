@@ -38,6 +38,7 @@ import org.openhab.automation.java223.common.BindingInjector;
 import org.openhab.automation.java223.common.Java223Constants;
 import org.openhab.automation.java223.common.Java223Exception;
 import org.openhab.automation.java223.common.RunScript;
+import org.openhab.automation.java223.internal.codegeneration.DependencyGenerator;
 import org.openhab.automation.java223.internal.strategy.jarloader.JarFileManager;
 import org.openhab.automation.java223.internal.strategy.jarloader.JarFileManager.JarFileManagerFactory;
 import org.openhab.core.service.WatchService;
@@ -91,7 +92,6 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
 
     @Override
     public void associateBindings(Class<?> compiledClass, Object compiledInstance, Map<String, Object> bindings) {
-
         // adding a special self reference to bindings : "bindings", to receive a map with all bindings
         bindings.put("bindings", bindings);
 
@@ -159,8 +159,8 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
     }
 
     @Override
-    public void processWatchEvent(WatchService.Kind kind, Path path) {
-        Path fullPath = LIB_DIR.resolve(path);
+    public void processWatchEvent(WatchService.Kind kind, Path pathEvent) {
+        Path fullPath = LIB_DIR.resolve(pathEvent);
         if (fullPath.getFileName().toString().endsWith("." + Java223Constants.JAVA_FILE_TYPE)) {
             switch (kind) {
                 case CREATE:
@@ -174,7 +174,22 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
                     logger.warn("watch event not implemented {}", kind);
             }
         } else if (fullPath.getFileName().toString().endsWith("." + Java223Constants.JAR_FILE_TYPE)) {
-            jarFileManagerfactory.rebuildLibPackages();
+            // exclude convenience jar from processing
+            if (fullPath.getFileName().toString().equals(DependencyGenerator.CONVENIENCE_DEPENDENCIES_JAR)) {
+                return;
+            }
+            switch (kind) {
+                case CREATE:
+                    jarFileManagerfactory.addLibPackage(fullPath);
+                    break;
+                case MODIFY:
+                case DELETE:
+                    logger.error("From watch event {} {}", kind, pathEvent);
+                    jarFileManagerfactory.rebuildLibPackages();
+                    break;
+                case OVERFLOW:
+                    break;
+            }
         } else {
             logger.trace(
                     "Received '{}' for path '{}' - ignoring (wrong extension, only .java and .jar file are supported)",
@@ -208,6 +223,7 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
             Files.walk(LIB_DIR).filter(Files::isRegularFile)
                     .filter(path -> path.toString().endsWith("." + Java223Constants.JAVA_FILE_TYPE))
                     .forEach(this::addLibrary);
+            logger.error("From scanLibDirectory");
             jarFileManagerfactory.rebuildLibPackages();
         } catch (IOException e) {
             logger.error("Cannot use libraries", e);

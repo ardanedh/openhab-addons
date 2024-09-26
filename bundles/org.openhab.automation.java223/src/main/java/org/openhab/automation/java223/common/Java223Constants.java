@@ -18,6 +18,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.openhab.core.OpenHAB;
 
 /**
+ * Constant class file.
  *
  * @author Gwendal Roulleau - initial contribution
  *

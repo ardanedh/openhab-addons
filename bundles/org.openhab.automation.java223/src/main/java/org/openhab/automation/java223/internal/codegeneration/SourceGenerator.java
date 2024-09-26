@@ -51,10 +51,10 @@ import freemarker.template.TemplateExceptionHandler;
 import freemarker.template.TemplateMethodModelEx;
 
 /**
- * The {@link SourceGenerator} is responsible for generating the additional classes
+ * The SourceGenerator is responsible for generating the additional classes
  * helping for rule development.
  * Include a delayed mechanism to prevent creating file multiple time when there is many
- * modifications in the registry (especially usefull at startup)
+ * modifications in the registry (especially useful at startup)
  *
  * @author Gwendal Roulleau - Initial contribution
  */

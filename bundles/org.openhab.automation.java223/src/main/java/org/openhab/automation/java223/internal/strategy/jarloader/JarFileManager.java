@@ -40,6 +40,7 @@ import javax.tools.StandardLocation;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.automation.java223.common.Java223Exception;
 import org.openhab.automation.java223.internal.codegeneration.DependencyGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -144,6 +145,7 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
 
         public void rebuildLibPackages() {
             FILEMANAGER_LOCK.lock();
+            logger.info("Full rebuild of java223 classpath");
             try (Stream<Path> libFileStream = Files.list(libDirectory)) {
                 List<Path> libFiles = libFileStream.filter(JAR_FILTER) //
                         .filter((path) -> !path.getFileName().toString() //
@@ -159,6 +161,24 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
                 upToDateAdditionalPackages = additionalPackages;
             } catch (IOException e) {
                 logger.warn("Could not load libraries: {}", e.getMessage());
+            } finally {
+                FILEMANAGER_LOCK.unlock();
+            }
+        }
+
+        public void addLibPackage(Path newLib) {
+            if (newLib.getFileName().toString() //
+                    .equals(DependencyGenerator.CONVENIENCE_DEPENDENCIES_JAR)) {
+                return;
+            }
+            try {
+                FILEMANAGER_LOCK.lock();
+                logger.debug("Library to load to memory: {}", newLib.toString());
+                if (upToDateClassLoader instanceof JarClassLoader upToDateJarClassLoader) {
+                    processLibrary(newLib, upToDateJarClassLoader, upToDateAdditionalPackages);
+                } else {
+                    throw new Java223Exception("Initialization error. The class loader should have been initialized");
+                }
             } finally {
                 FILEMANAGER_LOCK.unlock();
             }

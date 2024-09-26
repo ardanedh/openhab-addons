@@ -31,10 +31,12 @@ import helper.rules.RuleParserException;
 
 /**
  * Base helper class for all Java223 Scripts.
- * Standard JSR223 openhab bindings already declared as mandatory
- * Auto execution of a parsing rule method
- * Additionnal shortcut to usefull services
- * Include other generated helper classes
+ * This class needs the helper-lib.jar
+ * Features :
+ * - Standard JSR223 OpenHAB bindings already declared as fields for immediate access
+ * - Auto execution of a parsing rule method (internalParseRules calling RuleAnnotationParser)
+ * - Additional shortcut to useful services (automationManager, sharedCache, ruleManager, metadataRegistry)
+ * - Include other generated helper classes (_items, _actions, _things)
  *
  * @author Gwendal Roulleau - Initial contribution
  */
@@ -67,7 +69,7 @@ public abstract class Java223Script {
     // for transformation support
     protected @Nullable Object input;
 
-    // additional useful class :
+    // additional useful classes :
     protected @InjectBinding @NonNullByDefault({}) RuleManager ruleManager;
     protected @InjectBinding @NonNullByDefault({}) MetadataRegistry metadataRegistry;
 
@@ -77,7 +79,7 @@ public abstract class Java223Script {
     protected @InjectBinding @NonNullByDefault({}) Things _things;
 
     /**
-     * Parse all method rules in this script
+     * Parse all method/field rules in this script
      */
     @RunScript
     public void internalParseRules() {
@@ -109,6 +111,10 @@ public abstract class Java223Script {
         }
     }
 
+    /** 
+     * Use this method to manually inject bindings value in an object of your choice.
+     * You probably don't need this (you should use your object as a library and let this helper framework injects it)
+     */
     public void injectBindings(Object objectToInjectInto) {
         BindingInjector.injectBindingsInto(bindings, objectToInjectInto);
     }
