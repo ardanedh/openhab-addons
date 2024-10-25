@@ -1,12 +1,17 @@
 package ch.obermuhlner.scriptengine.java;
 
-import ch.obermuhlner.scriptengine.java.bindings.BindingStrategy;
-import ch.obermuhlner.scriptengine.java.execution.ExecutionStrategy;
-
-import javax.script.*;
 import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
+
+import javax.script.Bindings;
+import javax.script.CompiledScript;
+import javax.script.ScriptContext;
+import javax.script.ScriptEngine;
+import javax.script.ScriptException;
+
+import ch.obermuhlner.scriptengine.java.bindings.BindingStrategy;
+import ch.obermuhlner.scriptengine.java.execution.ExecutionStrategy;
 
 /**
  * The compiled Java script created by a {@link JavaScriptEngine}.
@@ -24,11 +29,12 @@ public class JavaCompiledScript extends CompiledScript {
      * @param engine the {@link JavaScriptEngine} that compiled this script
      * @param compiledClass the compiled {@link Class}
      * @param compiledInstance the instance of the compiled {@link Class} or {@code null}
-     *                         if no instance was created and only static methods will be called
-     *                         by the the {@link ExecutionStrategy}.
+     *            if no instance was created and only static methods will be called
+     *            by the the {@link ExecutionStrategy}.
      * @param executionStrategy the {@link ExecutionStrategy}
      */
-    JavaCompiledScript(JavaScriptEngine engine, Class<?> compiledClass, Object compiledInstance, ExecutionStrategy executionStrategy, BindingStrategy bindingStrategy) {
+    public JavaCompiledScript(JavaScriptEngine engine, Class<?> compiledClass, Object compiledInstance,
+            ExecutionStrategy executionStrategy, BindingStrategy bindingStrategy) {
         this.engine = engine;
         this.compiledClass = compiledClass;
         this.compiledInstance = compiledInstance;
@@ -110,9 +116,8 @@ public class JavaCompiledScript extends CompiledScript {
 
     private void pushVariables(Bindings globalBindings, Bindings engineBindings) throws ScriptException {
         Map<String, Object> mergedBindings = mergeBindings(globalBindings, engineBindings);
-        
-        if (bindingStrategy != null)
-        {
+
+        if (bindingStrategy != null) {
             bindingStrategy.associateBindings(compiledClass, compiledInstance, mergedBindings);
             return;
         }
@@ -131,22 +136,20 @@ public class JavaCompiledScript extends CompiledScript {
     }
 
     private void pullVariables(Bindings globalBindings, Bindings engineBindings) throws ScriptException {
-        
-        if (bindingStrategy != null)
-        {
+
+        if (bindingStrategy != null) {
             Map<String, Object> retrievedBindings = bindingStrategy.retrieveBindings(compiledClass, compiledInstance);
-            
+
             for (Map.Entry<String, Object> entry : retrievedBindings.entrySet()) {
-                  String name = entry.getKey();
-                  Object value = entry.getValue();
-                  
-                  setBindingsValue(globalBindings, engineBindings, name, value);
+                String name = entry.getKey();
+                Object value = entry.getValue();
+
+                setBindingsValue(globalBindings, engineBindings, name, value);
             }
-            
+
             return;
         }
-        
-        
+
         for (Field field : compiledClass.getFields()) {
             try {
                 String name = field.getName();

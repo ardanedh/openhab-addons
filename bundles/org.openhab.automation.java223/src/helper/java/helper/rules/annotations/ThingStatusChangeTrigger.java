@@ -29,7 +29,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  */
 @Repeatable(ThingStatusChangeTriggers.class)
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ ElementType.METHOD })
+@Target({ ElementType.METHOD, ElementType.FIELD })
 @NonNullByDefault
 public @interface ThingStatusChangeTrigger {
     String thingUID();

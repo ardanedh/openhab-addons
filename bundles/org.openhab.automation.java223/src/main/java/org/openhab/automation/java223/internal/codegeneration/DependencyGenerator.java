@@ -39,7 +39,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Create a JAR with some dependencies usefull to code from an external project
+ * Create a JAR with some dependencies inside, useful to code from an external IDE.
+ * This is purely a convenience JAR
  *
  * @author Gwendal Roulleau - Initial contribution, based on work from Jan N. Klug
  */
@@ -70,12 +71,21 @@ public class DependencyGenerator {
             "org.slf4j.Marker");
 
     private Path libDir;
+    // bundle
     private String additionalBundlesConfig;
+    // individual classes
     private String additionalClassesConfig;
     private BundleContext bundleContext;
 
     private Set<String> additionalClassesToExport = new HashSet<>();
 
+    /**
+     *
+     * @param libDir The target library directory
+     * @param additionalBundlesConfig Bundle to inspect. We will extract classes from it.
+     * @param additionalClassesConfig Individual classes to add to the exported JAR
+     * @param bundleContext
+     */
     public DependencyGenerator(Path libDir, String additionalBundlesConfig, String additionalClassesConfig,
             BundleContext bundleContext) {
         super();
@@ -91,8 +101,8 @@ public class DependencyGenerator {
     }
 
     /**
-     * Generate a JAR with useful classes for a client project.
-     * This JAR is not needed, it's just a facilitator for writing script in another environment.
+     * Generate a JAR with useful classes for a client project / IDE
+     * This JAR is not needed, it's just a convenience for writing script smoothly
      */
     public synchronized void createCoreDependencies() {
         try (FileOutputStream outFile = new FileOutputStream(libDir.resolve(CONVENIENCE_DEPENDENCIES_JAR).toFile())) {
@@ -104,24 +114,32 @@ public class DependencyGenerator {
             dependencies.addAll(Arrays.asList(additionalBundlesConfig.split(",")));
 
             Set<String> searchIn = new HashSet<>();
+            // search all dependencies
             for (String packageName : dependencies) {
+                // a bundle can have the exact name of the package we search, but also the name of a parent package
+                // so we add them all in our list of search
                 String[] packageComponents = packageName.split("\\.");
                 for (int i = 1; i <= packageComponents.length; i++) {
                     searchIn.add(String.join(".", Arrays.copyOfRange(packageComponents, 0, i)));
                 }
             }
 
+            // browse all bundle and search for matches with the list established above
             Set<String> packagesSuccessfullyExported = new HashSet<>();
             for (Bundle bundle : bundleContext.getBundles()) {
-                if (searchIn.contains(bundle.getSymbolicName())) {
+                if (searchIn.contains(bundle.getSymbolicName())) { // matches !
                     copyExportedPackagesByBundleInspection(dependencies, bundle, target, packagesSuccessfullyExported);
                 }
             }
 
-            Set<String> packagesNotFound = new HashSet<>(DEFAULT_DEPENDENCIES);
-            packagesNotFound.removeAll(packagesSuccessfullyExported.stream().map(s -> s.replaceAll("/", ".")).toList());
-            for (String remainingPackage : packagesNotFound) {
-                logger.warn("Failed to found classes to export in package {}", remainingPackage);
+            // we want to warn about the list of packages we didn't found
+            if (logger.isWarnEnabled()) {
+                Set<String> packagesNotFound = new HashSet<>(DEFAULT_DEPENDENCIES);
+                packagesNotFound
+                        .removeAll(packagesSuccessfullyExported.stream().map(s -> s.replaceAll("/", ".")).toList());
+                for (String remainingPackage : packagesNotFound) {
+                    logger.warn("Failed to found classes to export in package {}", remainingPackage);
+                }
             }
 
             Set<String> classesDependencies = new HashSet<>(DEFAULT_CLASSES_DEPENDENCIES);
@@ -232,7 +250,7 @@ public class DependencyGenerator {
         }
     }
 
-    public static List<String> getAllSuperclasses(final Class<?> cls) {
+    private static List<String> getAllSuperclasses(final Class<?> cls) {
         final List<String> classes = new ArrayList<>();
         Class<?> superclass = cls.getSuperclass();
         while (superclass != null) {
@@ -242,6 +260,12 @@ public class DependencyGenerator {
         return classes;
     }
 
+    /**
+     * Add classes to export inside the dependencies JAR
+     * Purely for convenience
+     *
+     * @param allClassesToExport
+     */
     public void setClassesToAddToDependenciesLib(Set<String> allClassesToExport) {
 
         Set<String> newAdditionalClassesToExport = new HashSet<>();

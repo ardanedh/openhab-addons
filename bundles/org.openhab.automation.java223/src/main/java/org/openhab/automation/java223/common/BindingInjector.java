@@ -23,15 +23,18 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
-import org.openhab.automation.java223.internal.strategy.Java223Strategy;
+import org.openhab.automation.java223.internal.strategy.jarloader.JarClassLoader;
 import org.openhab.core.automation.module.script.ScriptExtensionManagerWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import ch.obermuhlner.scriptengine.java.MemoryClassLoader;
 
 /**
  * Injecting value from binding for script execution
@@ -46,27 +49,30 @@ public class BindingInjector {
     /**
      * Smart injection of bindings value into an object.
      *
+     * @param sourceScriptClass The Script class initiating the execution
      * @param bindings a bindings maps with value to inject
      * @param objectToInjectInto An object. Its fields will be filled with value from the
      *            bindings, if a match is found
      */
-    public static void injectBindingsInto(Map<String, Object> bindings, Object objectToInjectInto) {
+    public static void injectBindingsInto(Class<?> sourceScriptClass, Map<String, Object> bindings,
+            Object objectToInjectInto) {
         try {
-            injectBindingsInto(bindings, objectToInjectInto, new HashMap<>());
+            injectBindingsInto(sourceScriptClass, bindings, objectToInjectInto, new HashMap<>());
         } catch (IllegalAccessException | IllegalArgumentException | SecurityException | InstantiationException
                 | InvocationTargetException e) {
             logger.error("Cannot inject bindings or libs", e);
         }
     }
 
-    private static void injectBindingsInto(Map<String, Object> bindings, Object objectToInjectInto,
-            Map<Class<?>, Object> libAlreadyInstanciated)
+    private static void injectBindingsInto(Class<?> sourceScriptClass, Map<String, Object> bindings,
+            Object objectToInjectInto, Map<Class<?>, Object> libAlreadyInstanciated)
             throws InstantiationException, IllegalAccessException, IllegalArgumentException, InvocationTargetException {
 
         Class<?> clazz = objectToInjectInto.getClass();
 
         for (Field field : getAllFields(clazz)) {
-            Object valueToInject = extractBindingValueForElement(bindings, field, libAlreadyInstanciated);
+            Object valueToInject = extractBindingValueForElement(sourceScriptClass, bindings, field,
+                    libAlreadyInstanciated);
             if (valueToInject != null) {
                 field.setAccessible(true);
                 field.set(objectToInjectInto, valueToInject);
@@ -78,13 +84,14 @@ public class BindingInjector {
      * Search what to inject into an element.
      * Find a library, or compute a name to use as a key, then use this key to search a value in the bindings data
      *
+     * @param sourceScriptClass The Script initiating the execution
      * @param bindings a map where to find the data to inject
      * @param annotatedElement the field/parameter element to inject value into
      **/
-    public static @Nullable Object extractBindingValueForElement(Map<String, Object> bindings,
-            AnnotatedElement annotatedElement) {
+    public static @Nullable Object extractBindingValueForElement(Class<?> sourceScriptClass,
+            Map<String, Object> bindings, AnnotatedElement annotatedElement) {
         try {
-            return extractBindingValueForElement(bindings, annotatedElement, new HashMap<>());
+            return extractBindingValueForElement(sourceScriptClass, bindings, annotatedElement, new HashMap<>());
         } catch (InstantiationException | IllegalAccessException | IllegalArgumentException
                 | InvocationTargetException e) {
             throw new Java223Exception("Cannot extract binding value for an element", e);
@@ -92,7 +99,7 @@ public class BindingInjector {
     }
 
     @SuppressWarnings({ "null", "unused" })
-    private static @Nullable Object extractBindingValueForElement(Map<String, Object> bindings,
+    private static @Nullable Object extractBindingValueForElement(Class<?> sourceScript, Map<String, Object> bindings,
             AnnotatedElement annotatedElement, Map<Class<?>, Object> libAlreadyInstanciated)
             throws InstantiationException, IllegalAccessException, IllegalArgumentException, InvocationTargetException {
 
@@ -109,14 +116,14 @@ public class BindingInjector {
             return null;
         }
 
-        // zero : exclusion case
+        // step zero : exclusion case
         InjectBinding injectBindingAnnotation = annotatedElement.getAnnotation(InjectBinding.class);
         if (injectBindingAnnotation != null && !injectBindingAnnotation.enable()) {
             return null;
         }
 
         // first, special case, is the field a library ?
-        if (Java223Strategy.containsLibrary(fieldType.getName())) { // it's a library
+        if (containsLibrary(sourceScript, fieldType.getName())) { // it's a library
             InjectBinding libraryAnnotation = fieldType.getAnnotation(InjectBinding.class);
             if (libraryAnnotation != null && !libraryAnnotation.enable()) { // but it's disabled at class level
                 // no injection
@@ -129,12 +136,17 @@ public class BindingInjector {
                 // use the empty constructor if available, or the first one
                 Constructor<?> constructor = Arrays.stream(constructors).filter(c -> c.getParameterCount() == 0)
                         .findFirst().orElseGet(() -> constructors[0]);
-                Object[] parameterValues = getParameterValuesFor(constructor, bindings, libAlreadyInstanciated);
+                Object[] parameterValues = getParameterValuesFor(sourceScript, constructor, bindings,
+                        libAlreadyInstanciated);
                 valueToInject = constructor.newInstance(parameterValues);
-                // and then also use injection into it
                 if (valueToInject != null) {
-                    injectBindingsInto(bindings, valueToInject, libAlreadyInstanciated);
+                    // store it to avoid multiple instantiation
+                    libAlreadyInstanciated.put(fieldType, valueToInject);
+                    // and then also use injection into it
+                    injectBindingsInto(sourceScript, bindings, valueToInject, libAlreadyInstanciated);
                 }
+            }
+            if (valueToInject != null) {
                 return valueToInject;
             }
         }
@@ -213,33 +225,48 @@ public class BindingInjector {
 
         // six, check class compatibility
         if (!fieldType.isAssignableFrom(value.getClass())) {
-            logger.warn("Parameter/field entry {} is of class {} and not assignable to type {}", named,
-                    value.getClass().getName(), fieldType.getName());
+            logger.warn(
+                    "Parameter/field entry {} is of class {} and not assignable to type {}. Did you use a reserved variable name ?",
+                    named, value.getClass().getName(), fieldType.getName());
         }
         return value;
     }
 
+    private static boolean containsLibrary(Class<?> sourceScriptClass, String name) {
+        // scripts are constructed by the Java223Strategy and by JavaScriptEngine
+        // we know that the ClassLoader is a MemoryClassLoader (contains all .java lib + the script)
+        // and that the parent is a JarClassLoader (contains all .jar lib).
+        // so we ask them if they loaded the class themselves
+        var memoryClassLoader = (MemoryClassLoader) Optional.ofNullable(sourceScriptClass.getClassLoader())
+                .orElseThrow(() -> new IllegalArgumentException("ClassLoader cannot be null"));
+        var parentJarClassLoader = (JarClassLoader) Optional.ofNullable(memoryClassLoader.getParent())
+                .orElseThrow(() -> new IllegalArgumentException("ClassLoader cannot be null"));
+        return parentJarClassLoader.isLoadedClass(name) || memoryClassLoader.isLoadedClass(name);
+    }
+
     /**
-     * Find the appropriate parameters value in the bindings map, for the executable bit of code.
+     * Find the appropriate parameters value in the bindings map, for the executable to run.
      *
-     * @param executable
+     * @param sourceScriptClass the source script class
+     * @param executable Method or constructor
      * @param bindings The map used to search the appropriate value to inject
-     * @param libAlreadyInstanciated To avoid looping the instantiation of library
+     * @param libAlreadyInstanciated To avoid looping the instantiation of libraries
      * @return
      * @throws InstantiationException
      * @throws IllegalAccessException
      * @throws IllegalArgumentException
      * @throws InvocationTargetException
      */
-    public static Object[] getParameterValuesFor(Executable executable, Map<String, Object> bindings,
-            @Nullable Map<Class<?>, Object> libAlreadyInstanciated)
+    public static Object[] getParameterValuesFor(Class<?> sourceScriptClass, Executable executable,
+            Map<String, Object> bindings, @Nullable Map<Class<?>, Object> libAlreadyInstanciated)
             throws InstantiationException, IllegalAccessException, IllegalArgumentException, InvocationTargetException {
         Parameter[] parameters = executable.getParameters();
         Object[] parameterValues = new Object[parameters.length];
         Map<Class<?>, Object> libAlreadyInstanciatedLocal = libAlreadyInstanciated != null ? libAlreadyInstanciated
                 : new HashMap<>();
         for (int i = 0; i < parameters.length; i++) {
-            parameterValues[i] = extractBindingValueForElement(bindings, parameters[i], libAlreadyInstanciatedLocal);
+            parameterValues[i] = extractBindingValueForElement(sourceScriptClass, bindings, parameters[i],
+                    libAlreadyInstanciatedLocal);
         }
         return parameterValues;
     }

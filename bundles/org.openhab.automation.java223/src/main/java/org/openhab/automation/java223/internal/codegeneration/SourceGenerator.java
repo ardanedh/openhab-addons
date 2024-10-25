@@ -52,7 +52,7 @@ import freemarker.template.TemplateMethodModelEx;
 
 /**
  * The SourceGenerator is responsible for generating the additional classes
- * helping for rule development.
+ * helping for rule development. It uses freemarker as a template engine.
  * Include a delayed mechanism to prevent creating file multiple time when there is many
  * modifications in the registry (especially useful at startup)
  *
@@ -69,7 +69,7 @@ public class SourceGenerator {
     private final ThingRegistry thingRegistry;
     private final BundleContext bundleContext;
 
-    private SourceWriter classWriter;
+    private SourceWriter sourceWriter;
     private DependencyGenerator dependencyGenerator;
 
     private static final String TPL_LOCATION = "/generated/";
@@ -77,16 +77,30 @@ public class SourceGenerator {
     Configuration cfg = new Configuration(Configuration.VERSION_2_3_32);
 
     private Integer stabilityGenerationWaitTime;
+
+    // keep a reference to generation method, to use as a key in the delayed map
     private InternalGenerator actionGeneration = this::internalGenerateActions;
     private InternalGenerator itemGeneration = this::internalGenerateItems;
     private InternalGenerator thingGeneration = this::internalGenerateThings;
     private Map<InternalGenerator, ScheduledFuture<?>> futureGeneration = new HashMap<>();
+
     private ScheduledExecutorService scheduledPool = ThreadPoolManager
             .getScheduledPool(ThreadPoolManager.THREAD_POOL_NAME_COMMON);
 
-    public SourceGenerator(SourceWriter classWriter, DependencyGenerator dependencyGenerator, ItemRegistry itemRegistry,
-            ThingRegistry thingRegistry, BundleContext bundleContext, Integer stabilityGenerationWaitTime) {
-        this.classWriter = classWriter;
+    /**
+     *
+     * @param sourceWriter The real writer, with a cache to avoid writing something already existing
+     * @param dependencyGenerator We will add to the dependency generator a list of package we thing would be
+     *            interesting to export
+     * @param itemRegistry Lookup inside the itemRegistry to generate a list of item
+     * @param thingRegistry Lookup inside the thingRegistry to generate a list of thing
+     * @param bundleContext We will search for class action inside
+     * @param stabilityGenerationWaitTime
+     */
+    public SourceGenerator(SourceWriter sourceWriter, DependencyGenerator dependencyGenerator,
+            ItemRegistry itemRegistry, ThingRegistry thingRegistry, BundleContext bundleContext,
+            Integer stabilityGenerationWaitTime) {
+        this.sourceWriter = sourceWriter;
         this.itemRegistry = itemRegistry;
         this.thingRegistry = thingRegistry;
         this.bundleContext = bundleContext;
@@ -99,7 +113,9 @@ public class SourceGenerator {
     }
 
     /**
-     * Delaying generation is especially usefull during startup, when item and thing are not all properly initialized.
+     * Delaying generation is especially useful during startup, when item and thing are not all properly initialized.
+     * To avoid overwriting file with incomplete list of things/items/actions, we must avoid writing to the file if the
+     * registries are not completely ready.
      * Until there is no more item/thing/action activating, this code will delay code generation.
      *
      * @param generator
@@ -134,7 +150,7 @@ public class SourceGenerator {
     }
 
     public void generateJava223Script() {
-        String packageName = classWriter.getPackageName(GENERATED);
+        String packageName = sourceWriter.getPackageName(GENERATED);
 
         try {
             Template template = cfg.getTemplate(TPL_LOCATION + "Java223Script.ftl");
@@ -144,7 +160,7 @@ public class SourceGenerator {
             StringWriter writer = new StringWriter();
             template.process(context, writer);
 
-            classWriter.replaceHelperFileIfNotEqual(packageName, "Java223Script", writer.toString());
+            sourceWriter.replaceHelperFileIfNotEqual(packageName, "Java223Script", writer.toString());
         } catch (IOException | TemplateException e) {
             logger.warn("Cannot create helper class file in library directory", e);
         }
@@ -176,7 +192,7 @@ public class SourceGenerator {
             }
             String scope = scopeAnnotation.name().toString();
             String simpleClassName = clazz.getSimpleName();
-            String packageName = classWriter.getPackageName(GENERATED, scope);
+            String packageName = sourceWriter.getPackageName(GENERATED, scope);
             actionsByScope.computeIfAbsent(scope, (key -> new HashSet<String>()))
                     .add(packageName + "." + simpleClassName);
 
@@ -215,7 +231,7 @@ public class SourceGenerator {
             StringWriter writer = new StringWriter();
             templateAction.process(context, writer);
 
-            classWriter.replaceHelperFileIfNotEqual(packageName, simpleClassName, writer.toString());
+            sourceWriter.replaceHelperFileIfNotEqual(packageName, simpleClassName, writer.toString());
         }
 
         // adding classes to the lib of exported dependencies
@@ -224,7 +240,7 @@ public class SourceGenerator {
         // now generate action factory :
         Template templateActionFactory = cfg.getTemplate(TPL_LOCATION + "Actions.ftl");
         Map<String, Object> context = new HashMap<>();
-        context.put("packageName", classWriter.getPackageName(GENERATED));
+        context.put("packageName", sourceWriter.getPackageName(GENERATED));
         context.put("classesToImport", actionsByScope.values().stream().flatMap(s -> s.stream()).toList());
         @SuppressWarnings("unchecked")
         TemplateMethodModelEx tmmLastName = (
@@ -238,7 +254,7 @@ public class SourceGenerator {
         StringWriter writer = new StringWriter();
         templateActionFactory.process(context, writer);
 
-        classWriter.replaceHelperFileIfNotEqual(classWriter.getPackageName(GENERATED), "Actions", writer.toString());
+        sourceWriter.replaceHelperFileIfNotEqual(sourceWriter.getPackageName(GENERATED), "Actions", writer.toString());
     }
 
     /**
@@ -281,7 +297,7 @@ public class SourceGenerator {
 
     private void internalGenerateItems() throws IOException, TemplateException {
         Collection<Item> items = itemRegistry.getItems();
-        String packageName = classWriter.getPackageName(GENERATED);
+        String packageName = sourceWriter.getPackageName(GENERATED);
 
         Template template = cfg.getTemplate(TPL_LOCATION + "Items.ftl");
         Map<String, Object> context = new HashMap<>();
@@ -293,12 +309,12 @@ public class SourceGenerator {
         StringWriter writer = new StringWriter();
         template.process(context, writer);
 
-        classWriter.replaceHelperFileIfNotEqual(packageName, "Items", writer.toString());
+        sourceWriter.replaceHelperFileIfNotEqual(packageName, "Items", writer.toString());
     }
 
     private void internalGenerateThings() throws IOException, TemplateException {
         Collection<Thing> things = thingRegistry.getAll();
-        String packageName = classWriter.getPackageName(GENERATED);
+        String packageName = sourceWriter.getPackageName(GENERATED);
 
         Template template = cfg.getTemplate(TPL_LOCATION + "Things.ftl");
         Map<String, Object> context = new HashMap<>();
@@ -314,7 +330,7 @@ public class SourceGenerator {
         StringWriter writer = new StringWriter();
         template.process(context, writer);
 
-        classWriter.replaceHelperFileIfNotEqual(packageName, "Things", writer.toString());
+        sourceWriter.replaceHelperFileIfNotEqual(packageName, "Things", writer.toString());
     }
 
     private static String capitalize(String minusString) {
@@ -335,5 +351,9 @@ public class SourceGenerator {
 
     private static interface InternalGenerator {
         public void generate() throws IOException, TemplateException;
+    }
+
+    public void setStabilityGenerationWaitTime(Integer stabilityGenerationWaitTime) {
+        this.stabilityGenerationWaitTime = stabilityGenerationWaitTime;
     }
 }

@@ -15,6 +15,7 @@ package org.openhab.automation.java223.internal.strategy;
 import static org.openhab.automation.java223.common.Java223Constants.LIB_DIR;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -22,10 +23,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Optional;
 
 import javax.script.ScriptException;
@@ -37,7 +36,9 @@ import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.automation.java223.common.BindingInjector;
 import org.openhab.automation.java223.common.Java223Constants;
 import org.openhab.automation.java223.common.Java223Exception;
+import org.openhab.automation.java223.common.ReuseScriptInstance;
 import org.openhab.automation.java223.common.RunScript;
+import org.openhab.automation.java223.internal.Java223CompiledScriptInstanceWrapper;
 import org.openhab.automation.java223.internal.codegeneration.DependencyGenerator;
 import org.openhab.automation.java223.internal.strategy.jarloader.JarFileManager;
 import org.openhab.automation.java223.internal.strategy.jarloader.JarFileManager.JarFileManagerFactory;
@@ -48,6 +49,7 @@ import org.slf4j.LoggerFactory;
 import ch.obermuhlner.scriptengine.java.MemoryFileManager;
 import ch.obermuhlner.scriptengine.java.bindings.BindingStrategy;
 import ch.obermuhlner.scriptengine.java.compilation.CompilationStrategy;
+import ch.obermuhlner.scriptengine.java.construct.ConstructorStrategy;
 import ch.obermuhlner.scriptengine.java.execution.ExecutionStrategy;
 import ch.obermuhlner.scriptengine.java.execution.ExecutionStrategyFactory;
 import ch.obermuhlner.scriptengine.java.name.DefaultNameStrategy;
@@ -60,28 +62,27 @@ import ch.obermuhlner.scriptengine.java.name.NameStrategy;
  */
 @NonNullByDefault
 public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrategy, BindingStrategy,
-        CompilationStrategy, WatchService.WatchEventListener {
+        CompilationStrategy, ConstructorStrategy, WatchService.WatchEventListener {
 
     private static Logger logger = LoggerFactory.getLogger(Java223Strategy.class);
 
-    private static final List<String> METHOD_NAMES_TO_EXECUTE = Arrays.asList("eval", "main", "run");
+    private static final List<String> METHOD_NAMES_TO_EXECUTE = Arrays.asList("eval", "main", "run", "exec");
 
     // Additional bindings, not in the openhab JSR 223 specification
     private Map<String, Object> additionalBindings;
 
     // Keeping a list of library .java file in the lib directory
-    private static Map<String, JavaFileObject> librariesByFullClassName = new HashMap<>();
-    private static Map<String, String> librariesFullClassNameByPath = new HashMap<>();
+    private static Map<String, JavaFileObject> librariesByPath = new HashMap<>();
 
     NameStrategy nameStrategy = new DefaultNameStrategy();
     JarFileManager.JarFileManagerFactory jarFileManagerfactory;
 
-    // Store bindings temporary to inject it as a method parameter during execution phase
-    private BindingsStore bindingsStore = new BindingsStore();
+    private boolean allowInstanceReuseDefaultProperty;
 
     public Java223Strategy(Map<String, Object> additionalBindings, ClassLoader classLoader) {
         super();
         this.additionalBindings = additionalBindings;
+        this.allowInstanceReuseDefaultProperty = false;
         jarFileManagerfactory = new JarFileManagerFactory(LIB_DIR, classLoader);
     }
 
@@ -98,62 +99,120 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
         // adding some custom additional fields
         bindings.putAll(additionalBindings);
 
-        // storing bindings to be used as parameter in case of deferred execution
-        bindingsStore.addBindings(compiledInstance, bindings);
-
-        // finally, inject bindings data in the script
-        BindingInjector.injectBindingsInto(bindings, compiledInstance);
+        // store bindings because of deferred instantiation
+        Java223CompiledScriptInstanceWrapper compiledInstanceWrapper = (Java223CompiledScriptInstanceWrapper) compiledInstance;
+        compiledInstanceWrapper.setBindings(bindings);
     }
 
     @Override
     public @Nullable Object execute(@Nullable Object instance) throws ScriptException {
-        if (instance == null) {
+
+        Java223CompiledScriptInstanceWrapper compiledInstanceWrapper = (Java223CompiledScriptInstanceWrapper) instance;
+        if (compiledInstanceWrapper == null) {
             throw new ScriptException("Cannot run null class/instance");
         }
 
+        Class<?> compiledClass = compiledInstanceWrapper.getCompiledClass();
+        Map<String, Object> bindings = compiledInstanceWrapper.getBindings();
+        // empty bindings (this instance may be used in the cache, but its bindings won't be useful anymore)
+        compiledInstanceWrapper.setBindings(null);
+
+        // instantiate the script
+        Object compiledInstance = instanciate(compiledInstanceWrapper, bindings);
+
+        // inject bindings data in the script
+        BindingInjector.injectBindingsInto(compiledClass, bindings, compiledInstance);
+
+        // find methods to execute
         Optional<Object> returned = null;
-        for (Method method : instance.getClass().getMethods()) {
+        for (Method method : compiledInstance.getClass().getMethods()) {
+            // methods with a special name, or methods with a special annotation
             if (METHOD_NAMES_TO_EXECUTE.contains(method.getName()) || method.getAnnotation(RunScript.class) != null) {
                 try {
-                    Map<String, Object> bindings = bindingsStore.getBindings(instance);
-                    if (bindings == null) {
-                        throw new ScriptException(
-                                String.format("Error executing entry point %s in %s : bindings is null",
-                                        method.getName(), instance.getClass().getSimpleName()));
+                    Object[] parameterValues = BindingInjector.getParameterValuesFor(compiledClass, method, bindings,
+                            null);
+                    var returnedLocal = method.invoke(compiledInstance, parameterValues);
+                    // keep arbitrarily only the first returned value
+                    if (returned == null || returned.isEmpty()) {
+                        if (returnedLocal != null) {
+                            returned = Optional.of(returnedLocal);
+                        } else {
+                            returned = Optional.empty();
+                        }
                     }
-                    Object[] parameterValues = BindingInjector.getParameterValuesFor(method, bindings, null);
-                    returned = Optional.ofNullable(method.invoke(instance, parameterValues));
                 } catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException
                         | InstantiationException e) {
-                    String simpleName = instance.getClass().getSimpleName();
+                    String simpleName = compiledInstance.getClass().getSimpleName();
                     logger.error("Error executing entry point {} in {}", method.getName(), simpleName, e);
                     throw new ScriptException(
                             String.format("Error executing entry point %s in %s", method.getName(), simpleName, e));
                 }
             }
         }
-        // arbitrary choose to return the last execution call result :
+
+        // return if there was at least one execution
         if (returned != null) {
-            return returned;
+            return returned.orElse(null);
         }
 
         throw new ScriptException(String.format(
                 "cannot execute: %s doesn't have a method named eval/main/run, or a RunScript annotated method",
-                instance.getClass().getSimpleName()));
+                compiledClass.getSimpleName()));
+    }
+
+    @SuppressWarnings("null")
+    private Object instanciate(Java223CompiledScriptInstanceWrapper compiledInstanceWrapper,
+            Map<String, Object> bindings) {
+
+        // default re-instantiation option overwritten by annotation if present
+        boolean instanceReuse = allowInstanceReuseDefaultProperty;
+        ReuseScriptInstance reuseAnnotation = compiledInstanceWrapper.getCompiledClass()
+                .getAnnotation(ReuseScriptInstance.class);
+        if (reuseAnnotation != null) {
+            instanceReuse = reuseAnnotation.value();
+        }
+
+        // if allowed, get from cache and return
+        var alreadyExistingWrappedScriptInstance = compiledInstanceWrapper.getWrappedScriptInstance();
+        if (instanceReuse && alreadyExistingWrappedScriptInstance != null) {
+            return alreadyExistingWrappedScriptInstance;
+        }
+
+        // create real instance from compiled class
+        // use the empty constructor if available, or the first one otherwise
+        Constructor<?>[] constructors = compiledInstanceWrapper.getCompiledClass().getDeclaredConstructors();
+        Constructor<?> constructor = Arrays.stream(constructors).filter(c -> c.getParameterCount() == 0).findFirst()
+                .orElseGet(() -> constructors[0]);
+
+        try {
+            Object[] parameterValues = BindingInjector.getParameterValuesFor(compiledInstanceWrapper.getCompiledClass(),
+                    constructor, bindings, null);
+            Object compiledInstance = constructor.newInstance(parameterValues);
+            if (compiledInstance == null) {
+                throw new Java223Exception("Instanciation of compiledInstance failed. Should not happened");
+            }
+            compiledInstanceWrapper.setWrappedScriptInstance(compiledInstance);
+            return compiledInstance;
+        } catch (InstantiationException | IllegalAccessException | IllegalArgumentException
+                | InvocationTargetException e) {
+            throw new Java223Exception("Cannot instantiate the script", e);
+        }
     }
 
     @Override
     public Map<String, Object> retrieveBindings(Class<?> compiledClass, Object compiledInstance) {
-        // not supported ? What it the use case ?
+        // not needed ? What is the use case ?
         return new HashMap<String, Object>();
     }
 
     @Override
     public List<JavaFileObject> getJavaFileObjectsToCompile(@Nullable String simpleClassName,
             @Nullable String currentSource) {
+        // the script
         JavaFileObject currentJavaFileObject = MemoryFileManager.createSourceFileObject(null, simpleClassName,
                 currentSource);
-        List<JavaFileObject> sumFileObjects = new ArrayList<>(librariesByFullClassName.values());
+        // and we add all the .java libraries
+        List<JavaFileObject> sumFileObjects = new ArrayList<>(librariesByPath.values());
         sumFileObjects.add(currentJavaFileObject);
         return sumFileObjects;
     }
@@ -161,6 +220,8 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
     @Override
     public void processWatchEvent(WatchService.Kind kind, Path pathEvent) {
         Path fullPath = LIB_DIR.resolve(pathEvent);
+
+        // All new .java file will be kept in memory
         if (fullPath.getFileName().toString().endsWith("." + Java223Constants.JAVA_FILE_TYPE)) {
             switch (kind) {
                 case CREATE:
@@ -174,6 +235,7 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
                     logger.warn("watch event not implemented {}", kind);
             }
         } else if (fullPath.getFileName().toString().endsWith("." + Java223Constants.JAR_FILE_TYPE)) {
+            // jar will be scanned to be added to the JarFileManagerFactory
             // exclude convenience jar from processing
             if (fullPath.getFileName().toString().equals(DependencyGenerator.CONVENIENCE_DEPENDENCIES_JAR)) {
                 return;
@@ -184,7 +246,8 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
                     break;
                 case MODIFY:
                 case DELETE:
-                    logger.error("From watch event {} {}", kind, pathEvent);
+                    // we cannot remove something from a ClassLoader, so we have to rebuild it
+                    logger.debug("From watch event {} {}", kind, pathEvent);
                     jarFileManagerfactory.rebuildLibPackages();
                     break;
                 case OVERFLOW:
@@ -203,8 +266,7 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
             String fullName = nameStrategy.getFullName(readString);
             String simpleClassName = NameStrategy.extractSimpleName(fullName);
             JavaFileObject javafileObject = MemoryFileManager.createSourceFileObject(null, simpleClassName, readString);
-            librariesFullClassNameByPath.put(path.toString(), fullName);
-            librariesByFullClassName.put(fullName, javafileObject);
+            librariesByPath.put(path.toString(), javafileObject);
         } catch (ScriptException | IOException e) {
             logger.info("Cannot get the file {} as a valid java object. Cause: {} {}", path.toString(),
                     e.getClass().getName(), e.getMessage());
@@ -212,10 +274,7 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
     }
 
     private void removeLibrary(Path path) {
-        String fullClassName = librariesFullClassNameByPath.remove(path.toString());
-        if (fullClassName != null) {
-            librariesByFullClassName.remove(fullClassName);
-        }
+        librariesByPath.remove(path.toString());
     }
 
     public void scanLibDirectory() {
@@ -223,59 +282,29 @@ public class Java223Strategy implements ExecutionStrategyFactory, ExecutionStrat
             Files.walk(LIB_DIR).filter(Files::isRegularFile)
                     .filter(path -> path.toString().endsWith("." + Java223Constants.JAVA_FILE_TYPE))
                     .forEach(this::addLibrary);
-            logger.error("From scanLibDirectory");
             jarFileManagerfactory.rebuildLibPackages();
         } catch (IOException e) {
             logger.error("Cannot use libraries", e);
         }
     }
 
-    public static boolean containsLibrary(String name) {
-        return librariesByFullClassName.containsKey(name);
-    }
-
-    private class BindingsStore {
-        private Map<Object, BindingStoreEntry> mapStorage = new HashMap<>();
-
-        private void addBindings(Object instance, Map<String, Object> bindings) {
-            clearOld();
-            mapStorage.put(instance, new BindingStoreEntry(System.currentTimeMillis(), bindings));
-        }
-
-        @Nullable
-        private Map<String, Object> getBindings(Object scriptInstance) {
-            BindingStoreEntry bindingsForObject = mapStorage.get(scriptInstance);
-            if (bindingsForObject != null) {
-                return bindingsForObject.bindings;
-            } else {
-                return null;
-            }
-        }
-
-        /**
-         * Clear bindings stored for more 50s.
-         * associateBindings and execute should be called sequentially, 50s is plenty enough
-         * (unless there is a deeper problem)
-         */
-        private void clearOld() {
-            Long now = System.currentTimeMillis();
-            for (Iterator<Entry<Object, BindingStoreEntry>> it = mapStorage.entrySet().iterator(); it.hasNext();) {
-                Entry<Object, BindingStoreEntry> next = it.next();
-                if (now - next.getValue().timeStamp() > 50000) {
-                    it.remove();
-                }
-            }
-        }
-    }
-
     @Override
     public JavaFileManager getJavaFileManager(@Nullable JavaFileManager parentJavaFileManager) {
         if (parentJavaFileManager == null) {
-            throw new Java223Exception("Parent JavaFileManager should not be null");
+            throw new IllegalArgumentException("Parent JavaFileManager should not be null");
         }
         return jarFileManagerfactory.create(parentJavaFileManager);
     }
 
-    private record BindingStoreEntry(Long timeStamp, Map<String, Object> bindings) {
+    @Override
+    @Nullable
+    public Object construct(@Nullable Class<?> clazz) throws ScriptException {
+        // in Java223ScriptEngineour strategy, we overwrote the compile method
+        // to use a cache. So the constructor strategy is useless
+        return null;
+    }
+
+    public void setAllowInstanceReuse(boolean allowInstanceReuse) {
+        this.allowInstanceReuseDefaultProperty = allowInstanceReuse;
     }
 }

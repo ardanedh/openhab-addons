@@ -27,7 +27,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  */
 @Repeatable(CronTriggers.class)
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ ElementType.METHOD })
+@Target({ ElementType.METHOD, ElementType.FIELD })
 @NonNullByDefault
 public @interface CronTrigger {
     String cronExpression();

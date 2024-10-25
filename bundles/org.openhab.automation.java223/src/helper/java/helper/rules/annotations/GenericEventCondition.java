@@ -27,7 +27,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Jan N. Klug - Initial contribution
  */
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ ElementType.METHOD })
+@Target({ ElementType.METHOD, ElementType.FIELD })
 @NonNullByDefault
 public @interface GenericEventCondition {
     String topic() default ANNOTATION_DEFAULT;

@@ -20,15 +20,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.openhab.automation.java223.common.Java223Constants;
-import org.openhab.automation.java223.common.Java223Exception;
 import org.openhab.core.service.WatchService;
 import org.openhab.core.service.WatchService.Kind;
 import org.slf4j.Logger;
@@ -36,7 +32,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Write java file in lib directory.
- * Do not write if already the same (sha-256 comparison)
+ * Do not write if already the same
  *
  * @author Gwendal Roulleau - Initial contribution
  */
@@ -47,7 +43,9 @@ public class SourceWriter implements WatchService.WatchEventListener {
 
     private final Logger logger = LoggerFactory.getLogger(SourceWriter.class);
 
-    protected final Map<String, byte[]> generatedClassesHash = new HashMap<>();
+    // There is no memory issue in storing whole source code here. The JVM deduplicate Strings
+    // and sources are already stored in memory by our implementation of MemoryJavaFileObject
+    protected final Map<String, String> generatedClassesSources = new HashMap<>();
 
     private final Path folder;
 
@@ -60,13 +58,16 @@ public class SourceWriter implements WatchService.WatchEventListener {
 
     @Override
     public void processWatchEvent(Kind kind, Path path) {
+        // Because we write only if we found differences with the existent,
+        // we have to maintain a consistent view of the file system.
+        // And thus we need to be notified when a file is deleted or modified
         Path fullPath = LIB_DIR.resolve(path);
         if (fullPath.getFileName().toString().endsWith("." + Java223Constants.JAVA_FILE_TYPE)
                 && (kind == Kind.DELETE || kind == Kind.MODIFY)) {
             // by intercepting delete or modify signal, we ensure that we remove java file from our internal database to
             // regenerate them thereafter
             String key = fullPath.toString().replace(File.separator, ".").substring(0, fullPath.toString().length());
-            generatedClassesHash.remove(key);
+            generatedClassesSources.remove(key);
         } else {
             logger.trace("Received '{}' for path '{}' - ignoring (wrong extension)", kind, fullPath);
         }
@@ -93,14 +94,8 @@ public class SourceWriter implements WatchService.WatchEventListener {
     }
 
     protected boolean sourceHasChange(String key, String newSource) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(newSource.getBytes());
-            byte[] previousHash = generatedClassesHash.put(key, hash);
-            return !Arrays.equals(previousHash, hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new Java223Exception("SHA-256 not available ? Should not happen");
-        }
+        String previousSource = generatedClassesSources.put(key, newSource);
+        return !newSource.equals(previousSource);
     }
 
     protected String getPackageName(String... packagePath) {

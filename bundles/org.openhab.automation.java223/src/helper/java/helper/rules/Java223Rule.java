@@ -35,7 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Extract code to execute, from diverse runnable field or method
+ * Extract code to execute, from diverse runnable field or from a method
  *
  * @author Gwendal Roulleau - Initial contribution
  *
@@ -43,10 +43,10 @@ import org.slf4j.LoggerFactory;
 @NonNullByDefault
 public class Java223Rule extends SimpleRule {
 
+    private static final Logger logger = LoggerFactory.getLogger(Java223Rule.class);
+
     private static final Set<Class<?>> ACCEPTABLE_FIELD_MEMBER_CLASSES = Set.of(SimpleRule.class, Function.class,
             BiFunction.class, Callable.class, Runnable.class, Consumer.class, BiConsumer.class);
-
-    private static final Logger logger = LoggerFactory.getLogger(Java223Rule.class);
 
     private BiFunction<Action, Map<String, Object>, @Nullable Object> codeToExecute;
 
@@ -93,7 +93,13 @@ public class Java223Rule extends SimpleRule {
         return null;
     }
 
-    public Java223Rule(Object script, Method method) throws RuleParserException {
+    /**
+     * Prepare some executable code from a method
+     *
+     * @param script The instance to execute the method on
+     * @param method The method to execute
+     */
+    public Java223Rule(Object script, Method method) {
         Parameter[] parameters = method.getParameters();
         codeToExecute = (module, inputs) -> {
             try {
@@ -105,19 +111,26 @@ public class Java223Rule extends SimpleRule {
                         if (parameters[i].getType().equals(Action.class)) {
                             parameterValues[i] = module;
                         } else {
-                            parameterValues[i] = BindingInjector.extractBindingValueForElement(inputs, parameters[i]);
+                            parameterValues[i] = BindingInjector.extractBindingValueForElement(script.getClass(),
+                                    inputs, parameters[i]);
                         }
                     }
                     return method.invoke(script, parameterValues);
                 }
             } catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException
                     | SecurityException e) {
-                logger.debug("Cannot execute method named {}", method.getName(), e);
+                logger.error("Cannot execute method named {}", method.getName(), e);
                 throw new Java223Exception("Cannot execute method named " + method.getName(), e);
             }
         };
     }
 
+    /**
+     * Prepare some executable code from a field
+     *
+     * @param script The instance to execute the method on
+     * @param method The field member containing some code to execute
+     */
     @SuppressWarnings({ "unchecked" })
     public Java223Rule(Object script, Field fieldMember) throws RuleParserException {
         Class<?> fieldType = fieldMember.getType();

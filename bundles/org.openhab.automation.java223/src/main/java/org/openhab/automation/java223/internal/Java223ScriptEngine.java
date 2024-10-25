@@ -15,6 +15,7 @@ package org.openhab.automation.java223.internal;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 import javax.script.Invocable;
 import javax.script.ScriptException;
@@ -23,6 +24,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.automation.java223.common.ScriptLoadedTrigger;
 import org.openhab.automation.java223.common.ScriptUnloadedTrigger;
+import org.openhab.automation.java223.internal.strategy.Java223Strategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,9 +32,9 @@ import ch.obermuhlner.scriptengine.java.JavaCompiledScript;
 import ch.obermuhlner.scriptengine.java.JavaScriptEngine;
 
 /**
- * This class add the Invocable aspect to the JavaScriptEngine from obermuhlner's base class
- * The Invocable aspect adds the ability to be called when loaded and unloaded script event
- * are triggered.
+ * This class adds a cache for compiled script to Obermuhlner's base class.
+ * This class also adds the Invocable aspect to the JavaScriptEngine. The Invocable aspect adds the ability to be called
+ * when loaded and unloaded script event are triggered.
  *
  * @author Gwendal Roulleau - Initial contribution
  */
@@ -42,17 +44,36 @@ public class Java223ScriptEngine extends JavaScriptEngine implements Invocable {
 
     private @Nullable JavaCompiledScript lastCompiledScript;
 
+    private Java223CompiledScriptCache cache;
+
+    private Java223Strategy java223Strategy;
+
+    public Java223ScriptEngine(Java223CompiledScriptCache cache, Java223Strategy java223Strategy) {
+        super();
+        this.cache = cache;
+        this.java223Strategy = java223Strategy;
+        setExecutionStrategyFactory(java223Strategy);
+        setBindingStrategy(java223Strategy);
+        setCompilationStrategy(java223Strategy);
+        setConstructorStrategy(java223Strategy);
+    }
+
     @Override
     public JavaCompiledScript compile(@Nullable String script) throws ScriptException {
-        JavaCompiledScript localLastCompiledScript;
         try {
-            localLastCompiledScript = super.compile(script);
-            lastCompiledScript = localLastCompiledScript;
-            if (localLastCompiledScript != null) {
-                return localLastCompiledScript;
-            } else {
-                throw new ScriptException("Compile result is null. Should not happened");
+            if (script == null) {
+                throw new ScriptException("script cannot be null");
             }
+            // reuse the original compilation class, potentially cached
+            Java223CompiledScriptInstanceWrapper compiledScriptInstanceWrapper = cache.getOrCompile(script,
+                    super::compile);
+            // then rebuild a new JavaCompiled object
+            JavaCompiledScript localCompiledScript = new JavaCompiledScript(this,
+                    compiledScriptInstanceWrapper.getCompiledClass(), compiledScriptInstanceWrapper, java223Strategy,
+                    java223Strategy);
+            lastCompiledScript = localCompiledScript;
+            return localCompiledScript;
+
         } catch (NoClassDefFoundError e) {
             throw new ScriptException("NoClassDefFoundError: " + e.getMessage());
         }
@@ -67,7 +88,8 @@ public class Java223ScriptEngine extends JavaScriptEngine implements Invocable {
     @Override
     public @Nullable Object invokeFunction(@Nullable String name, Object @Nullable... args) throws ScriptException {
 
-        // here we assume that the script engine served only once and that the wanted compiled script is the last one
+        // here we assume (from OpenHAB usual behavior) that the script engine served only once and so the wanted
+        // compiled script is the last (and only) one
         JavaCompiledScript compiledScript = this.lastCompiledScript;
         if (compiledScript == null || name == null) {
             return null;
@@ -85,8 +107,10 @@ public class Java223ScriptEngine extends JavaScriptEngine implements Invocable {
                 throw new ScriptException(name + " is not an allowed method in java223");
         }
 
-        Object compiledInstance = compiledScript.getCompiledInstance();
-        for (Method method : compiledInstance.getClass().getMethods()) {
+        Java223CompiledScriptInstanceWrapper wrapperInstance = (Java223CompiledScriptInstanceWrapper) compiledScript
+                .getCompiledInstance();
+        Object compiledInstance = wrapperInstance.getWrappedScriptInstance();
+        for (Method method : wrapperInstance.getCompiledClass().getMethods()) {
             Annotation scriptLoadedOrUnloadedAnnotation = method.getAnnotation(annotation);
             if (scriptLoadedOrUnloadedAnnotation != null) {
                 if (method.getParameters().length != 0) {
@@ -94,7 +118,17 @@ public class Java223ScriptEngine extends JavaScriptEngine implements Invocable {
                             + " called by ScriptLoaded/ScriptUnloaded trigger should not have any argument");
                 } else {
                     try {
-                        method.invoke(compiledInstance);
+                        if (Modifier.isStatic(method.getModifiers())) {
+                            method.invoke(null);
+                        } else {
+                            if (compiledInstance == null) {
+                                logger.debug(
+                                        "Calling ScriptLoaded/ScriptUnloaded {} method from a script not yet instanciated is ignored. Use a static modifier",
+                                        method.getName());
+                            } else {
+                                method.invoke(compiledInstance);
+                            }
+                        }
                     } catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
                         logger.warn("Method {} cannot be called by ScriptLoaded/ScriptUnloaded trigger",
                                 method.getName());

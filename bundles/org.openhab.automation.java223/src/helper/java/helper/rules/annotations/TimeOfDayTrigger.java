@@ -27,7 +27,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  */
 @Repeatable(TimeOfDayTriggers.class)
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ ElementType.METHOD })
+@Target({ ElementType.METHOD, ElementType.FIELD })
 @NonNullByDefault
 public @interface TimeOfDayTrigger {
     String time();

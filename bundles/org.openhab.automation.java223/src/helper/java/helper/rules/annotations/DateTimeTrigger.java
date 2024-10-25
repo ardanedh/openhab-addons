@@ -27,7 +27,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  */
 @Repeatable(DateTimeTriggers.class)
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ ElementType.METHOD })
+@Target({ ElementType.METHOD, ElementType.FIELD })
 @NonNullByDefault
 public @interface DateTimeTrigger {
     String itemName();

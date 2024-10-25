@@ -17,7 +17,10 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,7 +65,6 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
     public JarFileManager(M fileManager, ClassLoader classLoader,
             Map<String, List<JavaFileObject>> additionalPackages) {
         super(fileManager);
-
         this.classLoader = classLoader;
         this.additionalPackages = additionalPackages;
     }
@@ -72,10 +74,15 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
         return classLoader;
     }
 
+    @SuppressWarnings({ "null", "unused" })
     @Override
     public @NonNullByDefault({}) Iterable<JavaFileObject> list(@Nullable Location location,
             @Nullable String packageName, Set<JavaFileObject.Kind> kinds, boolean recurse) throws IOException {
-        Iterable<JavaFileObject> stdResult = fileManager.list(location, packageName, kinds, recurse);
+        var localFileManager = fileManager;
+        if (localFileManager == null) {
+            throw new Java223Exception("FileManager cannot not be null");
+        }
+        Iterable<JavaFileObject> stdResult = localFileManager.list(location, packageName, kinds, recurse);
 
         if (location != StandardLocation.CLASS_PATH || !kinds.contains(JavaFileObject.Kind.CLASS)) {
             return stdResult;
@@ -88,6 +95,7 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
         return mergedFileObjects;
     }
 
+    @SuppressWarnings({ "unused", "null" })
     @Override
     public JavaFileObject getJavaFileForOutput(@Nullable Location location, @Nullable String className,
             @Nullable Kind kind, @Nullable FileObject sibling) throws IOException {
@@ -95,15 +103,24 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
             URI outFile = URI.create(removeExtension(sibling.toUri().toString()) + ".class");
             return JarFileObject.classFileObject(outFile);
         }
-        return fileManager.getJavaFileForOutput(location, className, kind, sibling);
+        var localFileManager = fileManager;
+        if (localFileManager == null) {
+            throw new Java223Exception("FileManager cannot not be null");
+        }
+        return localFileManager.getJavaFileForOutput(location, className, kind, sibling);
     }
 
+    @SuppressWarnings({ "unused", "null" })
     @Override
     public String inferBinaryName(@Nullable Location location, @Nullable JavaFileObject file) {
         if (file instanceof JarFileObject) {
             return removeExtension(getPath(file.toUri()).replace("/", ".").substring(1));
         }
-        return fileManager.inferBinaryName(location, file);
+        var localFileManager = fileManager;
+        if (localFileManager == null) {
+            throw new Java223Exception("FileManager cannot not be null");
+        }
+        return localFileManager.inferBinaryName(location, file);
     }
 
     private static String removeExtension(String name) {
@@ -119,6 +136,12 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
         }
     }
 
+    /**
+     * Maintain an internal state to instantiate JarFileManager easily
+     *
+     * @author Gwendal Roulleau - Use of a factory
+     *
+     */
     public static class JarFileManagerFactory {
 
         private static final Lock FILEMANAGER_LOCK = new ReentrantLock();
@@ -126,8 +149,10 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
 
         private Map<String, List<JavaFileObject>> upToDateAdditionalPackages = Map.of();
         private ClassLoader upToDateClassLoader;
-
         private ClassLoader parentClassLoader;
+
+        MessageDigest md5Digest;
+        byte[] md5LibSum = new byte[0];
 
         Path libDirectory;
 
@@ -137,6 +162,11 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
             this.libDirectory = libDirectory;
             // temporary/default use of the parent :
             this.upToDateClassLoader = parentClassLoader;
+            try {
+                this.md5Digest = MessageDigest.getInstance("MD5");
+            } catch (NoSuchAlgorithmException e) {
+                throw new Java223Exception("Cannot instanciate md5 digest. Should not happen");
+            }
         }
 
         public JarFileManager<JavaFileManager> create(JavaFileManager fileManager) {
@@ -145,12 +175,24 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
 
         public void rebuildLibPackages() {
             FILEMANAGER_LOCK.lock();
-            logger.info("Full rebuild of java223 classpath");
+
             try (Stream<Path> libFileStream = Files.list(libDirectory)) {
                 List<Path> libFiles = libFileStream.filter(JAR_FILTER) //
-                        .filter((path) -> !path.getFileName().toString() //
+                        .filter((path) -> !path.getFileName().toString() // exclude convenience lib
                                 .equals(DependencyGenerator.CONVENIENCE_DEPENDENCIES_JAR)) //
                         .collect(Collectors.toList());
+
+                // first check if it's really needed, in case we overwrite a file with the same content
+                for (Path path : libFiles) {
+                    md5Digest.update(Files.readAllBytes(path));
+                }
+                byte[] newMd5LibSum = md5Digest.digest();
+                if (Arrays.equals(newMd5LibSum, md5LibSum)) {
+                    logger.debug("No change and no need to rebuild lib package classloader");
+                    return;
+                }
+
+                logger.info("Full rebuild of java223 classpath");
                 logger.debug("Libraries to load from '{}' to memory: {}", libDirectory, libFiles);
 
                 JarClassLoader newClassLoader = new JarClassLoader(parentClassLoader);
@@ -159,6 +201,9 @@ public class JarFileManager<M extends JavaFileManager> extends ForwardingJavaFil
 
                 upToDateClassLoader = newClassLoader;
                 upToDateAdditionalPackages = additionalPackages;
+
+                md5LibSum = newMd5LibSum;
+
             } catch (IOException e) {
                 logger.warn("Could not load libraries: {}", e.getMessage());
             } finally {

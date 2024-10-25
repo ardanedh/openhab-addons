@@ -50,6 +50,7 @@ import org.openhab.core.items.MetadataRegistry;
 import org.openhab.core.items.events.ItemAddedEvent;
 import org.openhab.core.items.events.ItemRemovedEvent;
 import org.openhab.core.service.WatchService;
+import org.openhab.core.thing.ThingManager;
 import org.openhab.core.thing.ThingRegistry;
 import org.openhab.core.thing.ThingStatus;
 import org.openhab.core.thing.events.ThingAddedEvent;
@@ -89,10 +90,12 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
     private final PackageResourceListingStrategy osgiPackageResourceListingStrategy;
     private final Java223Strategy java223Strategy;
     private final ScriptInterceptorStrategy scriptWrappingStrategy;
+    private Java223CompiledScriptCache compiledScriptCache;
 
     private final WatchService watchService;
 
-    private final SourceGenerator classGenerator;
+    private final SourceGenerator sourceGenerator;
+    private final SourceWriter classWriter;
     private final DependencyGenerator dependencyGenerator;
 
     private static final Set<ThingStatus> INITIALIZED = Set.of(ThingStatus.ONLINE, ThingStatus.OFFLINE,
@@ -124,33 +127,43 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
                 "");
         Integer initializationWaitTime = ConfigParser.valueAsOrElse(properties.get("stabilityGenerationWaitTime"),
                 Integer.class, 10000);
+        Integer scriptCacheSize = ConfigParser.valueAsOrElse(properties.get("scriptCacheSize"), Integer.class, 50);
+        Boolean allowInstanceReuse = ConfigParser.valueAsOrElse(properties.get("allowInstanceReuse"), Boolean.class,
+                false);
 
         osgiPackageResourceListingStrategy = this::listClassResources;
         java223Strategy = new Java223Strategy(getAdditionalBindings(),
                 bundleContext.getBundle().adapt(BundleWiring.class).getClassLoader());
+        java223Strategy.setAllowInstanceReuse(allowInstanceReuse);
         scriptWrappingStrategy = new ScriptWrappingStrategy();
+        compiledScriptCache = new Java223CompiledScriptCache(scriptCacheSize);
 
         try {
             copyHelperLibJar();
 
             dependencyGenerator = new DependencyGenerator(LIB_DIR, additionalBundlesConfig, additionalClassesConfig,
                     bundleContext);
-            SourceWriter classWriter = new SourceWriter(LIB_DIR);
-            this.classGenerator = new SourceGenerator(classWriter, dependencyGenerator, itemRegistry, thingRegistry,
+            classWriter = new SourceWriter(LIB_DIR);
+            this.sourceGenerator = new SourceGenerator(classWriter, dependencyGenerator, itemRegistry, thingRegistry,
                     bundleContext, initializationWaitTime);
-            classGenerator.generateThings();
-            classGenerator.generateActions();
-            classGenerator.generateItems();
-            classGenerator.generateJava223Script();
+            sourceGenerator.generateThings();
+            sourceGenerator.generateActions();
+            sourceGenerator.generateItems();
+            sourceGenerator.generateJava223Script();
             dependencyGenerator.createCoreDependencies();
+            // When a lib is removed, SourceWriter should now because it may have to regenerate it
             watchService.registerListener(classWriter, LIB_DIR);
         } catch (IOException e) {
             throw new Java223Exception("Cannot create helper library / class files in lib directory", e);
         }
 
         this.watchService = watchService;
+        // first building of internal in memory lib representation
         java223Strategy.scanLibDirectory();
+        // When a lib change, update internal lib storage
         watchService.registerListener(java223Strategy, LIB_DIR);
+        // When a lib change, invalidate cache of compiled script
+        watchService.registerListener(compiledScriptCache, LIB_DIR);
 
         logger.info("Bundle activated");
     }
@@ -178,7 +191,7 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
                 throw new Java223Exception("Cannot read helper lib in java223. Should not happened");
             }
         } catch (IOException e) {
-            throw new Java223Exception("Cannot write helper file", e);
+            throw new Java223Exception("Cannot read helper file in classpath", e);
 
         }
 
@@ -199,7 +212,16 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
                 "");
         String additionalClassesConfig = ConfigParser.valueAsOrElse(properties.get("additionalClasses"), String.class,
                 "");
+        Integer scriptCacheSize = ConfigParser.valueAsOrElse(properties.get("scriptCacheSize"), Integer.class, 50);
+        Integer stabilityGenerationWaitTime = ConfigParser.valueAsOrElse(properties.get("stabilityGenerationWaitTime"),
+                Integer.class, 10000);
+        Boolean allowInstanceReuse = ConfigParser.valueAsOrElse(properties.get("allowInstanceReuse"), Boolean.class,
+                false);
+
         dependencyGenerator.setAdditionalConfig(additionalBundlesConfig, additionalClassesConfig);
+        compiledScriptCache.setCacheSize(scriptCacheSize);
+        sourceGenerator.setStabilityGenerationWaitTime(stabilityGenerationWaitTime);
+        java223Strategy.setAllowInstanceReuse(allowInstanceReuse);
         dependencyGenerator.createCoreDependencies();
         logger.debug("java223 configuration update received ({})", properties);
     }
@@ -207,6 +229,8 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
     @Deactivate
     public void deactivate() {
         watchService.unregisterListener(java223Strategy);
+        watchService.unregisterListener(classWriter);
+        watchService.unregisterListener(compiledScriptCache);
     }
 
     @Override
@@ -225,12 +249,8 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
     @Override
     public @Nullable ScriptEngine createScriptEngine(String scriptType) {
         if (getScriptTypes().contains(scriptType)) {
-            JavaScriptEngine engine = new Java223ScriptEngine();
-
-            engine.setExecutionStrategyFactory(java223Strategy);
-            engine.setBindingStrategy(java223Strategy);
+            JavaScriptEngine engine = new Java223ScriptEngine(compiledScriptCache, java223Strategy);
             engine.setPackageResourceListingStrategy(osgiPackageResourceListingStrategy);
-            engine.setCompilationStrategy(java223Strategy);
             engine.setScriptInterceptorStrategy(scriptWrappingStrategy);
             engine.setCompilationOptions(Arrays.asList("-g", "-parameters"));
 
@@ -255,9 +275,12 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
      */
     private Map<String, Object> getAdditionalBindings() {
         RuleManager ruleManager = bundleContext.getService(bundleContext.getServiceReference(RuleManager.class));
+        ThingManager thingManager = bundleContext.getService(bundleContext.getServiceReference(ThingManager.class));
         MetadataRegistry metadataRegistry = bundleContext
                 .getService(bundleContext.getServiceReference(MetadataRegistry.class));
-        return Map.of(Java223Constants.RULE_MANAGER, ruleManager, Java223Constants.METADATA_REGISTRY, metadataRegistry);
+        return Map.of(Java223Constants.RULE_MANAGER, ruleManager, //
+                Java223Constants.METADATA_REGISTRY, metadataRegistry, //
+                Java223Constants.THING_MANAGER, thingManager);
     }
 
     private Collection<String> listClassResources(String packageName) {
@@ -284,14 +307,15 @@ public class Java223ScriptEngineFactory extends JavaScriptEngineFactory
                     && INITIALIZED.contains(eventStatusInfoChange.getStatusInfo().getStatus()))
                     || (ThingStatus.UNINITIALIZED.equals(eventStatusInfoChange.getStatusInfo().getStatus())
                             && INITIALIZED.contains(eventStatusInfoChange.getOldStatusInfo().getStatus()))) {
-                classGenerator.generateActions();
+                sourceGenerator.generateActions();
             }
         } else if (ITEM_EVENTS.contains(eventType)) {
             logger.debug("Added/updated item: {}", event);
-            classGenerator.generateItems();
+            sourceGenerator.generateItems();
         } else if (THING_EVENTS.contains(eventType)) {
             logger.debug("Added/updated thing: {}", event);
-            classGenerator.generateThings();
+            sourceGenerator.generateThings();
+            sourceGenerator.generateActions();
         }
     }
 }

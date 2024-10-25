@@ -27,6 +27,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * This is an implementation of JavaFileManager with extensions for JAR files
+ * This ClassLoader will be the parent of the MemoryClassLoader (holding the
+ * script and the .java library files)
+ * This ClassLoader will hold all classes in JAR.
  *
  * @author Jan N. Klug - Initial contribution
  */
@@ -49,6 +52,17 @@ public class JarClassLoader extends ClassLoader {
         } catch (IOException e) {
             logger.warn("Failed to process '{}': {}", path, e.getMessage());
         }
+    }
+
+    /**
+     * Has this ClassLoader loaded this class in its memory
+     *
+     * @param name The name of the Class to test
+     * @return true if this ClassLoader already load the class
+     */
+    public boolean isLoadedClass(String name) {
+        String path = name.replace('.', '/').concat(".class");
+        return availableClasses.containsKey(path);
     }
 
     @Override

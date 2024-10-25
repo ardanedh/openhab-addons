@@ -1,822 +1,543 @@
+# openHAB Java223 Scripting
 
-# openHAB Java Scripting
+Write OpenHAB scripts in Java as a JSR223 language.
 
-This openHAB add-on provides support for JSR 223 scripts written in Java that can be used as rules or transformations.
+Features :
+- full JSR 223 support (use in files, in GUI, transformations, inline rule action, etc...)
+- auto injection of OpenHAB variable/preset for simplicity
+- library support for sharing code (.jar and .java)
+- rule annotations available in the helper library for creating rules the easiest way
+- helper library files auto generation for items, things, and actions, with strong typing and ease of use
+- cache compiled scripts in memory for blazingly fast executions after the first one (sub millisecond overload)
+- no boilerplate code for simple script: you can do a one liner script, as declaring a class and a method is optional.
+- optional reuse of instances script to share values between execution occurrences
+- designed to be easily used with your favorite IDE
 
-It makes heavy use of Eric Obermühlner's Java JSR 223 ScriptEngine [java-scriptengine](https://github.com/eobermuhlner/java-scriptengine).
+It makes heavy use of Eric Obermühlner's Java JSR 223 ScriptEngine [java-scriptengine](https://github.com/eobermuhlner/java-scriptengine), and is partially based on work from other OpenHAB contributors that create their own JSR 223 java automation bundle (many thanks to them).
 
-# Advantages of Programming Scripts in Java
+# What you can do ?
 
-* high level language Java 
+All JSR223 OpenHAB related thing, and surely a bit more, thanks to your scripts sharing the same JVM as OpenHAB.
+If you just want to see how to use it, see the [Examples](#examples) section.
 
-* use the power of the Java runtime library
+# How it works
 
-* develop in your favorite IDE
+You should first take a look at the [official documentation about OpenHAB JSR223 support](https://www.openhab.org/docs/configuration/jsr223.html).
+That said, keep reading for useful insider informations.
 
-* remote-debug scripts
+## Script location: where can I use Java223 ?
 
-* scripts run in Java's speed, after JVM warm-up in native code speed
+### First location option: GUI
 
-# Programming Hints
+As a full featured JSR223 automation bundle, you can use the GUI to use Java223 scripts, everywhere JSR223 scripts are allowed. Including, but not limited to:
+- Creating `Scripts` in the so-called GUI section
+- Inside a `Rule`, as an inline script action in the `Then` or the `Only If` section
+- When linking a channel to an item, as a transformation `Profile` of type `Script Java`
 
-* all Java classes used as JSR 223 script have to inherit from [org.openhab.automation.java223.scriptsupport.Script](src/main/java/org/openhab/automation/java223/scriptsupport/Script.java)
+### Second location option: File script
 
-* When the openHAB ScriptFileWatcher detects a new .java File in conf/automation/jsr223 
-  it is loaded, compiled into memory and its onLoad() method is executed.
-  Then it is parsed for @Rule annotations and the rules are activated.
-  
-* You can use a raw script with no "boilerplate" code and direct instructions by NOT specifiying a class in your script (not putting a `public class` declaration). Your script will automatically be wrapped in a Class and an onLoad method. You obviously cannot declare any method within this raw script (because it is itself contained in the onLoad method), but you can use import or package declarations (they will be extracted and put in the start of the resulting script).
+A JSR223 script file is a script located in your configuration directory, under the `automation/jsr223` sub directory.
 
-* Java script classes do not see other script classes. Each one has its own ClassLoader. This is a consequence of the way openHAB JSR223 and the Java ScriptEngine works : each script is loaded separately and so has its own memory ClassLoader. You can use create libraries (see below) to circumvent this limitation : each script will still have its own ClassLoader, but all annotated classes will also be compiled with each of them.
+At startup, or each time a file is created (or modified) in this directory, OpenHAB will handle it to the relevant JSR223 scripting language for **immediate** execution (using the extension as a discriminating value). So in our case, every `.java` files will be handled by the Java223 automation bundle.
 
-* you can also use libraries packaged as [OSGI bundles](#library-code), or with the library directory (see below)
+As a script can create and register rules during its execution (by accessing and using the OpenHAB automation manager), **this 'file mode' is then especially useful for defining rules**. And icing on the cake: when a script that created rules is deleted, the linked rules are also deleted, thanks to the way OpenHAB registers a rule (same for modification, the associated rules are deleted and recreated). See the [rules](#rules) section for more information on how to create a rule.
 
-* you can use openHAB classes from the packages listed in [bnd.bnd](bnd.bnd).
+## Execution
 
-* openHAB Java Scripting requires openHAB 3.3.0 or later
-
-# Generated helper classes
-
-On startup, and on every item/thing modifications, this plugin will generate helper classes files in the conf/automation/lib/java directory :
-* Items.java List all items in your openHAB instance
-* Things.java List all thing in your openHAB instance
-* One class for each addon Action available
-All theses classes, because they are in the lib directory, are compiled alongside your custom scripts and automatically available.
-
-# Remote Debugging
-
-start openHAB with start_debug.sh and remote debug from Eclipse, stop at breakpoints.
-
-![screenshot](src/doc/images/EclipseDebug.png?raw=true)
- 
-
-# Test
-
-* Copy org.openhab.automation.java223-VERSION.jar into the addons folder (download via the [Releases](https://github.com/weberjn/org.openhab.automation.java223/releases) link).
-
-* Copy from the sample Java classes into conf/automation/jsr223/
-
-(they are all in src/script/java)
-
-A Java class is loaded, compiled into memory and its onLoad() method executed.
-A Java script will not work as a Python or JS Script (which is evaluated during load). For java this is simulated with the onLoad() method. So, rules can be defined programmatically in onLoad().
-
-Or, you can annotate public instance variables of type SimpleRule. See the FileWriteRule sample. You can also directly annotate methods of the Script. See the CronRule sample.
-
-# Project for Scripts
-
-To have a script compile without errors in Eclipse, it should be in a Java project with openHAB dependencies and a dependency to java223.
-
-* create a folder with a Maven project:
-* use this [src/doc/pom.xml](src/doc/pom.xml) as template 
-* change groupId and artifactId
-* import the folder as maven project into Eclipse
-* create the Java scripts in src/main/java in the default package (or link to your openhab `conf/automation/jsr223` directory)
-* (optional) link your openhab folder `conf/automation/lib/java` as a source directory to use the generated helper classes.
-* if the source compiles without errors, copy it to conf/automation/jsr223
-
-```sh
-mvn  -DskipChecks clean install
-```
-
-
-# Library Code 
-
-## 1st method : Bundle
-
-Java Rules has `DynamicImport-Package: *` so it can access code in other bundles. 
-
-Bundle your code as OSGI bundle as in this sample: https://github.com/weberjn/org.openhab.automation.java223.ext 
-
-## 2nd method : Library directory
-
-You can also put java files in the `conf/automation/lib/java` directory. By doing so, these libraries will be available to all your java scripts. The library class can still extends the `Script` base class to access its facilities.
-
-You can then use it normally (import, new, use static method), or you can even inject it in your script by using the annotation `@org.openhab.automation.java223.annotations.Library` on a class member. This injection also allows the library to be instanciated by openHAB and to use all the `Script` facilities, such as access to registries, etc.
-
-Be aware that a library instance is not shared between scripts. If you want to share data you should find another way.
-
-# Building the Addon
-
-Clone [java-scriptengine](https://github.com/eobermuhlner/java-scriptengine) and mvn install (symlink ch.obermuhlner.scriptengine.java/src to make the Maven
-build work).
-
-Clone Java Scripting under openhab-addons/bundles and run mvn install
-
-# Sample Scripts
-
-The samples are all in [src/script/java](src/script/java).
-
-## Item change rules, annotation based
+A Java223 script does not need to have any dependency to anything in order to be compiled and executed. It can just be a plain, simple java class like this one:
 
 ```java
+public class SimpleClass {
+    public void main() {
+        int sum = 2 + 2;
+    }
+}
+```
+(In fact it can even be a simpler one-liner, see the [no boilerplate section](#noboilerplate)
 
-import java.util.Map;
+When OpenHAB presents a java script to the Java223 automation bundle, it searches for methods with name like `main`, or `eval`, or `run`, or `exec`, or any methods annotated with `@RunScript` and then runs them (from here we will refer to those as the "runnable methods"). That's all you need for a very simple script !
 
-import org.openhab.automation.java223.annotations.ItemStateUpdateTrigger;
-import org.openhab.automation.java223.annotations.Rule;
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.automation.Action;
-import org.openhab.core.automation.module.script.rulesupport.shared.simple.SimpleRule;
-import org.openhab.core.items.Item;
+A note about the context : each script has its own context, its own ClassLoader. It means that script are perfectly separated, and cannot interact with, or even see, each other. But do not worry, because there are dedicated features for this ([shared cache](#sharedcache) for sharing values, [library](#library) for sharing code).
+
+## Variable injection
+
+Of course, a script needs to communicate with OpenHAB to be useful. We will call 'OpenHAB inputs' those objects, values, references, that OpenHAB gives to the automation bundles, in order for it to expose them to user. For example, a reference to the items registry will allow a script to interact with items by checking their state or giving them command.
+
+With this Java223 bundle, it is done by the way of automatic injection. It means that you don't need to do anything special. You just have to declare variable in your script and the bundle will take care of injecting the corresponding value in it. There are three input injection possibilities:
+- as a field in your script (see [example](#fieldinjection))
+- as a method parameter in your runnable methods (see [example](#parameterinjection))
+- as a method parameter in the constructor of the script. (see [example](#constructorinjection))
+
+The variable name is used to find the correct value to inject, so take care of your spelling (full reference in [official documentation about OpenHAB JSR223 support](https://www.openhab.org/docs/configuration/jsr223.html#scriptextension-objects-all-jsr223-languages) ), or inherit the [Java223Script helper class](#java223script) to directly have the right variable names.
+
+### Advanced injection
+
+You can control the injection further (i.e. overriding default behavior, or directly injecting something from a preset) with the @InjectBinding annotation. See [example](#injectbinding).
+
+<a id="rules"></a>
+
+## Defining Rules
+
+As a JSR223 OpenHAB language, you can define rule with the OpenHAB DSL. All needed classes and instance (SimpleRule, TriggerBuilder, automationManager instance, etc.) are of course exposed natively. You can see an example of how to use it [here](https://www.openhab.org/docs/configuration/jsr223.html#example-rules-for-a-first-impression) (written with other languages, but concepts and objects for Java223 are the same).
+
+**However**, keep in mind that there is a much, much more convenient way to do this. You can jump to the relevant section [here](#helperrules). But the following sections also exposes some prerequisites if you want to have a better comprehension before jumping in.
+
+<a id="library"></a>
+
+## Library for sharing code
+
+To share reusable code between your scripts, you have to define a library. A library is a .java file (or a .jar archive containing several compiled class) located in your configuration directory, under the `automation\lib\java` subdirectory.
+
+The Java223 bundle will monitor this directory, and automatically adds everything inside to the compilation unit of your script (although, it's not applied retrospectively). The script still have its dedicated ClassLoader, but inside this ClassLoader, all your library classes are also available.
+
+Be careful : it also means that other scripts have their own library classes inside their own ClassLoader. **You cannot share value between scripts this way**, even by using a static property inside a library class.
+
+### Auto injection of library
+
+Your library probably also needs to communicate with OpenHAB. You can of course pass OpenHAB input references as a parameter to your library methods, or by a setter. For example, if we imagine a library `MyLibrary` that need access to the items and things registries :
+
+```java
+...
+    ItemRegistry ir; // <- auto injected in your script
+    ThingRegistry things; // <- auto injected in your script
+    public void main() {
+        var myUsefulParameter1 = ...
+        var myUsefulParameter2 = ...
+        MyLibrary myLib = new MyLibrary();
+        myLib.doSomethingInteresting(ir, things, myUsefulParameter1, myUsefulParameter2); // <- then pass 'ir' and 'things' for your library to use
+    }
+...
+```
+
+**But**, as you can see, it can be cumbersome and unnecessarily hard to read. This Java223 bundle provides a much simpler way to do this : letting it instantiate your library and auto inject all OpenHAB inputs value into them. It works on field, or method/constructor parameter.  See [example](#libraryautoinjection). It can even works recursively : a lib can reference another lib, itself referencing some OpenHAB inputs, and all this will work out of the box.
+
+Getting back to our example : As the library instantiation and injection with the items and things registries are taken care of, the same code can then become :
+
+```java
+    public void main(MyLibrary myLib) { <- myLib will be instantiated and auto injected with the OpenHAB inputs declared in it.
+        var myUsefulParameter1 = ...
+        var myUsefulParameter2 = ...
+        myLib.doSomethingInteresting(myUsefulParameter1, myUsefulParameter2);
+    }
+```
+
+Tip: The Java223 automation bundle recognizes a library by its type, so you don't have to worry about respecting a naming convention for the variable. Feel free to use anything.
+
+
+## Generated helper library
+
+The helper library is totally optional, but you should seriously consider using it, as it will make your code experience much more streamlined. It consists of two parts: dynamically .java generated files, and a JAR file with some already compiled class.
+
+### Java dynamic classes
+
+The Java223 bundle generates some ready-to-use libraries in the `automation\lib\java` directory. These classes are dynamic and contains information about your OpenHAB setup.
+
+You will get several java files in the package `helper.generated` :
+- Items.java : contains all your items name as static String, and label as their javadoc. Also contains methods to directly get the Item, casted to the right Class. (see [example](#itemsandthings))
+- Things.java : contains all your Thing UID as static String, with label as their javadoc. Also contains methods to directly get the Thing. (see [example](#itemsandthings))
+- Actions.java : contains strongly typed, ready to use methods, to get the actions available on your things. (see [example](#actions))
+<a id="java223script"></a>
+- Java223Script.java : this abstract class will come **very** handy. In fact, it is so handy that all your scripts should inherit it ! It already contains all OpenHAB inputs variables, as well as some others useful shortcut. Take a look at it.
+
+As these files are no more no less standard library files, you can of course use them as candidates for auto injection in your script. Be careful though, do not use the variable name `items`, `things`, or `actions`, as they are already reserved as OpenHAB input values for the ItemRegistry, ThingsRegistry, and ScriptThingActions respectively.
+As a reference, in the super handy Java223Script helper abstract class, we are using `_items`, `_things`, `_actions` for them.
+
+**Tip : all your scripts, *including libraries*, can extend the `Java223Script` class. This way they will automatically obtain easy access to all OpenHAB inputs, to some shortcuts, etc.
+
+<a id="helperrules"></a>
+
+### helper-lib.jar and rules
+
+**This is the most useful feature of this entire bundle.**
+
+The Java223 bundle also copies in your `automation\lib\java` a pre-compiled jar with a set of library files inside. This jar is no more, no less, a standard library jar, and is an example of how powerful the OpenHAB JSR223 feature is. It contains all you need to define Rules with the help of simple-to-use annotations. The entry point is the `RuleAnnotationParser` class. The method `parse` inside automatically scans your script, search for annotated method defining rules, and then creates and registers them.
+
+Tip : The best way to use this functionality is to extend the `Java223Script`, as it already contains a call to the `parse` method in an autorun method.
+
+When combined with all the aforementioned facilities, see how easy it is to define a rule.
+
+```java
+import ...;
+
+public class MyRule extends Java223Script {
+
+    @Rule
+    @ItemStateUpdateTrigger(itemName = Items.my_detector_item, state = OnOffType.ON.toString())
+    public void myRule() {
+        _items.my_bulb_item.send(OnOffType.ON);
+    }
+}
+```
+
+This rule above is triggered by a 'ON' state update of an item linked to a detector, and then light a bulb : **Here really shines the JSR223 for Java : no random string, full auto completion from your IDE, strongly typed code.**
+
+You can also use automatic injection **in your rule method parameter**. It is especially useful for strongly typed parameter. Take a look at this rule, triggered by two different detectors:
+
+```java
+import ...;
+
+public class MyRule extends Java223Script {
+
+    @Rule(name = "detecting.people", description = "Detecting people and light")
+    @ItemStateUpdateTrigger(itemName = Items.my_detector_item, state = OnOffType.ON.toString())
+    @ItemStateUpdateTrigger(itemName = Items.my_otherdetector_item, state = OnOffType.ON.toString())
+    public void myRule(ItemStateChange inputs) { // HERE, strongly typed parameter
+        _items.my_bulb_item.send(OnOffType.ON);
+        logger.info("Movement detected at " + inputs.getItemName()); // inputs.getItemName() give me the triggering detector name
+    }
+}
+```
+`ItemStateChange` is available in the helper-lib.jar, alongside other strongly typed events. As it is a member of the Java223 library, its field are automatically injected with the corresponding parameter given by OpenHAB. So, by using the right event object for your trigger, such as `ItemStateChange` in this example, you don't have to check the documentation to search for how the event parameter you need is named, and you won't miss the parameter because you misspelled it. You should find in the helper lib the other event objects matching the triggers of your rules.
+
+I you want all the input parameter at once, you can use the parameter `Map<String, ?> inputs`.
+
+
+## Share value between scripts
+
+To share value between different scripts, you can use the shared cache available in the `cache` preset. Auto-inject it with :
+
+```java
+    protected @InjectBinding(preset = "cache", named = "sharedCache") ValueCache sharedCache;
+```
+
+This cache is accessible as a `Map<String, Object>`.
+
+Tip : it is automatically available to script inheriting the Java223Script helper class.
+
+
+## Share value between script executions
+
+The Java223 automation bundle has an option `allowInstanceReuse`. If set to true, the default engine behavior will be to reuse script instance between executions, instead of re-instantiating with a `new` operator every time. If you run the same script over and over, it will try to use the same instance, thus allowing you to store information in its field (in memory, so only for the duration of the OpenHAB process). Be careful for read/write concurrency issue.
+
+Of course your script has to remain the same. So script file in the `automation/jsr223` directory cannot use this functionality, as they are only executed once by nature, when OpenHAB start, or when they are created or modified (which is another way of saying deleted/recreated).
+
+You can also overwrite this default behavior for individual script by using the `@ReuseScriptInstance` annotation on the class level.
+
+Take note that it uses the compilation cache. So if your cache is not big enough, persistence of your field value is not assured.
+
+You should also note that Rule inner working is different : your rule method code is always executed on the same instance, no matter the value of `allowInstanceReuse` or the presence of a `@ReuseScriptInstance` configuration. So you can also share information here.
+
+<a id="noboilerplate"></a>
+
+## No boilerplate code.
+
+Sometimes, you 'real' (useful) code is very short, and you don't need complex logic, custom auto injection, etc.
+In this case, you can omit the 'boilerplate' code, and just write your 'useful' code.
+Under the hood, the Java223 bundle will 'wrap' your code inside a class inheriting `Java223Script`, with a bunch of standard import (mainly items type) and a main method.
+
+For example, this one line script is perfectly valid
+
+```java
+    _items.myitem().send(OFF); // let there be light
+```
+
+This 'wrapping' will take place if nowhere in your code a trimmed line starts with "public class".
+
+If you need to import some class, you can also do it. The import statements (lines starting with "import ") will be parsed and added in the beginning of the resulting script, before the wrapping class and method.
+
+You can return a value. The line returning the value MUST begins with "return ".
+
+Of course, you cannot declare method inside this kind of script, as you code is already wrapped into one.
+
+
+## Transformation
+
+You can use Java223 script in transformation.
+A transformation is a piece of code with an input and an output. So:
+- you can use the OpenHAB input value named 'input'. Auto injection is possible. Or you can inherit the Java223Script, as it is already declared.
+- your runnable method must return a value
+
+Here is an example, with the 'no boilerplate' functionality.
+
+## Use your IDE
+
+
+## Presets
+
+dfgh
+
+<a id="examples"></a>
+
+# Examples
+
+
+## Lightning a bulb
+
+```java
 import org.openhab.core.library.types.OnOffType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import helper.generated.Java223Script;
 
-public class MPDSilencer extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.mpdrules");
-
-    private OnOffType mpd_previous_stop_state;
-
-    @Rule(name = "PhoneRingingRule")
-    @ItemStateUpdateTrigger(id = "PhoneRingingTrigger", item = "PhoneRinging")
-    public SimpleRule phoneRingingRule = new SimpleRule() {
-
-        @Override
-        public Object execute(Action module, Map<String, ?> inputs) {
-
-            logger.info("phone", "phone ringing {}", inputs.get("state"));
-
-            Item mpd_stop = itemRegistry.get("mpd_music_player_pi_stop");
-
-            OnOffType mpd_stop_state = (OnOffType) mpd_stop.getState();
-
-            mpd_previous_stop_state = mpd_stop_state;
-
-            if (mpd_stop_state == OnOffType.OFF) {
-                events.sendCommand("mpd_music_player_pi_stop", "ON");
-            }
-
-            return "";
-        }
-    };
-
-    @Rule(name = "PhoneIdleRule")
-    @ItemStateUpdateTrigger(id = "PhoneIdleTrigger", item = "PhoneIdle")
-    public SimpleRule phoneIdleRule = new SimpleRule() {
-
-        @Override
-        public Object execute(Action module, Map<String, ?> inputs) {
-
-            logger.info("phone", "phone idle {}", inputs.get("state"));
-
-            if (mpd_previous_stop_state == OnOffType.OFF) {
-                events.sendCommand("mpd_music_player_pi_stop", "OFF");
-            }
-
-            return "";
-        }
-    };
-
-    @Override
-    protected Object onLoad() {
-        logger.info("phone", "rules loaded");
-        return null;
-    };
-}
-```
-
-## Changing Items
-
-```java
-
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.LockSupport;
-
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.items.Item;
-import org.openhab.core.library.items.NumberItem;
-import org.openhab.core.library.types.DecimalType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class EventBusExamples extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.eventbus");
-
-    @Override
-    protected Object onLoad() {
-
-        logger.info("Java onLoad()");
-
-        events.sendCommand("Livingroom_Light", "OFF");
-
-        Item item = itemRegistry.get("Morning_Temperature");
-
-        ((NumberItem) item).setState(new DecimalType(0.0f));
-
-        events.postUpdate(item, 37.2f);
-
-        Number state = (Number) item.getState();
-        logger.info("new State: {}", state.floatValue());
-
-        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100));
-
-        state = (Number) item.getState();
-        logger.info("new State again: {}", state.floatValue());
-
-        logger.info("eventbus done");
-        
-        return null;
+public class BasicExample extends Java223Script {
+    public void main() {
+        _items.myitem().send(OnOffType.OFF); // let there be light
     }
 }
 ```
 
-## Cron Rule, method annotation based
+<a id="simplerule"></a>
+
+## Create a simple rule
+
+This rule is triggered by a 'ON' state update of an item linked to a detector, and then light a bulb. 
 
 ```java
+import ...;
 
+public class MyRule extends Java223Script {
+
+    @Rule
+    @ItemStateUpdateTrigger(itemName = Items.my_detector_item, state = OnOffType.ON.toString())
+    public void myRule() {
+        _items.my_bulb_item.send(OnOffType.ON);
+    }
+}
+```
+
+## Create a rule with several trigger and options
+
+This time, the rule is triggered by a 'ON' state update on one of two possible detectors.
+The method parameter is a strongly typed library element (`ItemStateChange`) and as such, its field are auto injected with the right value from the input. Thanks to this, it is easy to get the input parameters without risking using a wrong parameter name. For example, we get here the name of the item triggering the detection, for a detailed log.
+Instead of the default (the method name for the label), it has a description, and a dedicated name for the label, and both will be shown on the OpenHAB GUI.
+
+```java
+import ...;
+
+public class MyRule extends Java223Script {
+
+    @Rule(name = "detecting.people", description = "Detecting people and light")
+    @ItemStateUpdateTrigger(itemName = Items.my_detector_item, state = OnOffType.ON.toString())
+    @ItemStateUpdateTrigger(itemName = Items.my_otherdetector_item, state = OnOffType.ON.toString())
+    public void myRule(ItemStateChange inputs) { // here, strongly typed parameter
+        _items.my_bulb_item.send(OnOffType.ON);
+        logger.info("Movement detected at {}", inputs.getItemName());
+    }
+}
+```
+
+## No boilerplate code
+
+A one liner can also work
+
+```java
+    _items.myitem().send(OnOffType.OFF); // let there be light
+```
+
+
+## Example of different injection types of OpenHAB input variables
+
+<a id="fieldinjection"></a>
+
+If you don't want to extend the `Java223Script` class, then you will have to take care of formatting your script for injection of OpenHAB input value.
+
+### Field input injection
+
+```java
+import ...;
+
+public class FieldInjectionExample {
+    ItemRegistry itemRegistry; // <-- the injection will happen here, 'itemRegistry' is a valid OpenHAB input name
+    public void main() {
+        itemRegistry.get("myitem").send(OnOffType.ON);;
+    }
+}
+```
+
+<a id="parameterinjection"></a>
+
+### Method parameter input injection
+
+```java
+import ...;
+
+public class MethodInjectionExample {
+    public void main(ItemRegistry itemRegistry) {  // <-- the injection will happen here, 'itemRegistry' is a valid OpenHAB input name
+        itemRegistry.get("myitem").send(OnOffType.ON);;
+    }
+}
+```
+
+<a id="constructorinjection"></a>
+
+### Constructor parameter input injection
+
+```java
+import ...;
+
+public class ConstructorInjectionExample {
+
+    ItemRegistry myItemRegistry;  // <-- the injection WON'T happen here because the variable name is not the name as an available OpenHAB input
+
+    public SimpleClass(ItemRegistry itemRegistry) { // <-- the injection will happen here, 'itemRegistry' is a valid OpenHAB input name
+        this.myItemRegistry = itemRegistry;
+    }
+
+    public void main() {
+        myItemRegistry.get("myitem").send(OnOffType.ON);;
+    }
+}
+```
+
+<a id="runrule"></a>
+
+## Run another rule or script
+
+You may want to run another rule or a script. The rule manager is not a standard JSR223 variable, but the Java223 automation bundle can nonetheless inject it.
+First, inject the rule manager in your script, then use it with the runNow method and the UID of the rule.
+
+Tip : The ruleManager is already declared as a field in the Java223Script helper class that you can inherit.
+
+```java 
 import java.util.Map;
+import org.openhab.core.automation.RuleManager;
 
-import org.openhab.automation.java223.annotations.CronTrigger;
-import org.openhab.automation.java223.annotations.Rule;
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.automation.Action;
-import org.openhab.core.automation.module.script.rulesupport.shared.simple.SimpleRule;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class CronRule extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.cronrule");
-
-    private int counter = 1;
-
-    @Rule(name = "CronRule")
-    @CronTrigger(id = "CronTrigger", cronExpression = "0 * * * * ?")
-    public Object execute(Map<String, ?> inputs) {
-
-        logger.info("Java cronrule execute {}", counter++);
-
-        return "";
+public class RunAnotherRule {
+    public void main(RuleManager ruleManager) {
+        // simple execution :
+        ruleManager.runNow("myruleid");
+        // execution with parameters in a key / value map
+        // set the boolean parameter to true if you want to check conditions before execution (in case of a full rule)
+        ruleManager.runNow("myparameterizedruleid", false, Map.of("key", "value")))
     }
-
-    @Override
-    protected Object onLoad() {
-        logger.info("Java onLoad()");
-        return null;
-    };
 }
 ```
 
-## ItemChanged Rule
+## Disable a thing
 
-```java
+The ThingManager is not a standard JSR223 variable, but the Java223 automation bundle can nonetheless inject it. It is also available in the base class `Java223Script`, as shown in this example.
 
+```java 
 import java.util.Map;
+import org.openhab.core.automation.RuleManager;
 
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.automation.Action;
-import org.openhab.core.automation.Trigger;
-import org.openhab.core.automation.module.script.rulesupport.shared.simple.SimpleRule;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class ItemChangedRule extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.itemrule");
-
-    private int counter = 1;
-
-    @Override
-    protected Object onLoad() {
-
-        logger.info("Java onLoad()");
-
-        SimpleRule sr = new SimpleRule() {
-
-            @Override
-            public Object execute(Action module, Map<String, ?> inputs) {
-
-                logger.info("Java execute {}", counter++);
-
-                return "";
-            }
-        };
-
-        Trigger trigger = createItemStateChangeTrigger("BatteryLevelChangedTrigger", "BatteryLevel");
-
-        ruleBuilder(sr).withName("BatteryLevelChanged").withTrigger(trigger).activate();
-
-        logger.info("BatteryLevelChanged rule activated");
-        
-        return null;
-    };
-}
-```
-
-## Transformation Script in Java
-
-a sitemap referencing a transformation in Java
-
-```java
-sitemap demo label="My home automation" {
-    Frame label="Uptime" {
-
-		Text icon="time" label="uptime [JAVA(SecHHMMSSTransformation.java):%s]" item=uptimeSeconds
-    }
-}
-
-```
-
-and the transformation used (it must be in conf/transform)
-
-```java
-import java.time.Duration;
-
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class SecHHMMSSTransformation extends Script {
-
-	private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.TR");
-	
-	@Override
-	protected Object onLoad() {
-		
-		logger.info("Java onLoad()");
-		
-		String s = (String)input;
-		
-		Duration d = null;
-		
-		try {
-			d = Duration.ofSeconds(Long.parseLong(s));
-		} catch (NumberFormatException e) {
-			return null;
-		}
-
-		String timeHHMMSS = String.format("%02d:%02d:%02d", d.toHours(), d.toMinutesPart(), d.toSecondsPart());
-
-		logger.info( "duration: {}", timeHHMMSS);
-		
-		return timeHHMMSS;
-
-	}
-
-}
-```
-
-## Addon Actions
-
-```java
-
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.thing.binding.ThingActions;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class SendMail extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.mail");
-
-    @Override
-    protected Object onLoad() {
-
-        ThingActions thingActions = actions.get("mail", "mail:smtp:mailSender");
-        invokeAction(thingActions, "mail_at_receiver", "a subject", "mailcontent Java script onload()");
-
-        logger.info("mail sent");
-
-        return null;
+public class DisableThing extends Java223Script {
+    public void main() {
+        thingManager.setEnabled(_things.network_pingdevice_mything().getUID(), false);
     }
 }
 ```
 
-## Addon Actions with helper class
 
-```java
+## Use metadata
 
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.thing.binding.ThingActions;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+This script overwrites Google Assistant metadata every time it is executed (so, at each OpenHAB startup), effectively keeping it as some kind of external "database".
 
-public class SendMailHelperAction extends Script {
+```java 
+public class MetadataDatabase {
 
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.mail");
+    protected MetadataRegistry metadataRegistry;
 
-    @Override
-    protected Object onLoad() {
-
-        MailSendMailActions sendMailAction = new MailSendMailActions(actions, "mail:smtp:mailSender");
-        sendMailAction.sendMail("mail_at_receiver", "a subject", "mailcontent Java script onload()");
-
-        logger.info("mail sent");
-        
-        return null;
+    public void main() {
+        create("ga", Items.lock, "Lock", Map.of("name", "Front door"));
+        create("ga", Items.room_light, "Light", Map.of("name", "Master bedroom light"));
     }
-}
-```
-
-## Static Actions
-
-```java
-
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.model.script.actions.Exec;
-import org.openhab.core.model.script.actions.HTTP;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class StaticActions extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.javarules.actions");
-
-    @Override
-    protected Object onLoad() {
-
-        String res = HTTP.sendHttpGetRequest("http://localhost/");
-
-        String cmd = "termux-media-player play camera-shutter.mp3";
-        Exec.executeCommandLine("ssh", "nexus9", cmd);
-
-        logger.info("static actions done");
-        
-        return null;
-    }
-}
-```
-
-## Transformations
-
-```java
-
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.transform.actions.Transformation;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class Transformations extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.javarules.transform");
-
-    @Override
-    protected Object onLoad() {
-
-        String s = Transformation.transform("REGEX", ".*(hello).*", "hello, world");
-
-        logger.info("transform done, got: " + s);
-        
-        return null;
-    }
-}
-```
-
-## Persistence
-
-```java
-
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.items.Item;
-import org.openhab.core.persistence.extensions.PersistenceExtensions;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class PersistItems extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.persist");
-
-    @Override
-    protected Object onLoad() {
-
-        Item item = itemRegistry.get("Morning_Temperature");
-
-        PersistenceExtensions.persist(item);
-
-        logger.info("persist done");
-        
-        return null;
-    }
-}
-```
-
-## Write to a File
-
-```java
-
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
-import java.util.Map;
-
-import org.openhab.automation.java223.annotations.ItemStateUpdateTrigger;
-import org.openhab.automation.java223.annotations.Rule;
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.automation.Action;
-import org.openhab.core.automation.module.script.rulesupport.shared.simple.SimpleRule;
-import org.openhab.core.items.Item;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class FileWriteRule extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.writefile");
-
-    @Rule(name = "TemperatureToFileRule")
-    @ItemStateUpdateTrigger(id = "TemperatureTrigger", item = "Morning_Temperature")
-    public SimpleRule temperatureToFileRule = new SimpleRule() {
-
-        @Override
-        public Object execute(Action module, Map<String, ?> inputs) {
-
-            logger.info("@ItemStateUpdateTrigger Morning_Temperature");
-
-            Item item = itemRegistry.get("Morning_Temperature");
-
-            Number state = (Number) item.getState();
-
-            Path path = Paths.get("/tmp/Morning_Temperature.txt");
-
-            try {
-                Files.writeString(path, String.format("%f%n", state.floatValue()), StandardOpenOption.CREATE,
-                        StandardOpenOption.APPEND);
-            } catch (IOException e) {
-                logger.error("", e);
-                throw new RuntimeException(e);
-            }
-
-            return "";
-        }
-    };
-
-    @Override
-    protected Object onLoad() {
-        logger.info("Java onLoad()");
-        return null;
-    }
-}
-```
-
-Set a new temperature
-
-```Shell
-openhab> openhab:update Morning_Temperature 37.7
-```
-
-```Shell
-$ cat /tmp/Morning_Temperature.txt
-37.700001
-```
-
-## Json Rule
-
-This rule is triggered by either of two items, creates a Json String from their states and sends it to a third item 
-(which should be linked to an MQTT command topic, on which a Python script could listen and feed an e-paper display).
-
-```java
-
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import org.openhab.automation.java223.annotations.ItemStateUpdateTrigger;
-import org.openhab.automation.java223.annotations.Rule;
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.automation.Action;
-import org.openhab.core.automation.module.script.rulesupport.shared.simple.SimpleRule;
-import org.openhab.core.items.Item;
-import org.openhab.core.library.types.DecimalType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.gson.Gson;
-
-public class JsonRule extends Script {
-
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.jsonrule");
-
-    final String outsideTemperatureItem = "OutsideTemperature";
-    final String salonTemperatureItem = "SalonTemperature";
-
-    DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
-    @Rule(name = "JsonRule")
-    @ItemStateUpdateTrigger(id = "OutsideTemperatureTrigger", item = outsideTemperatureItem)
-    @ItemStateUpdateTrigger(id = "SalonTemperatureTrigger", item = salonTemperatureItem)
-    public SimpleRule jsonrule = new SimpleRule() {
-
-        @Override
-        public Object execute(Action module, Map<String, ?> inputs) {
-
-            logger.info("Java jsonrule execute: {}", inputs.toString());
-
-            try {
-                String json = createJson();
-
-                logger.info("json: {}", json);
-
-                Item item = itemRegistry.get("EPaper_Screen_Json");
-
-                events.sendCommand(item, json);
-            } catch (Exception e) {
-                logger.error(inputs.toString(), e);
-                throw e;
-            }
-
-            return "";
-        }
-    };
-
-    @Override
-    protected Object onLoad() {
-        logger.info("Java onLoad()");
-        return null;
-    };
     
-
-    private String createJson() {
-        Map<String, List<Map<String, Object>>> screen = new HashMap<>();
-
-        List<Map<String, Object>> ops = new ArrayList<>();
-
-        int x = 10;
-        int y = 0;
-
-        LocalDateTime ldt = LocalDateTime.now();
-        String s = ldt.format(dateTimeFormatter);
-
-        Map<String, Object> text0 = new HashMap<>();
-        text0.put("type", "text");
-        text0.put("x", x);
-        text0.put("y", y);
-        text0.put("text", String.format("@ %s", s));
-
-        ops.add(text0);
-
-        y += 30;
-
-        DecimalType dt = itemRegistry.get(outsideTemperatureItem).getStateAs(DecimalType.class);
-
-        if (dt != null) {
-            float f = dt.floatValue();
-
-            Map<String, Object> text1 = new HashMap<>();
-            text1.put("type", "text");
-            text1.put("x", x);
-            text1.put("y", y);
-            text1.put("text", String.format("Temp Outside: %.1f", f));
-
-            ops.add(text1);
-
-            y += 30;
-        }
-
-        DecimalType dts = itemRegistry.get(salonTemperatureItem).getStateAs(DecimalType.class);
-
-        if (dts != null) {
-            float f = dts.floatValue();
-
-            Map<String, Object> text1 = new HashMap<>();
-            text1.put("type", "text");
-            text1.put("x", x);
-            text1.put("y", y);
-            text1.put("text", String.format("Temp Salon: %.1f", f));
-
-            ops.add(text1);
-
-            y += 30;
-        }
-
-        screen.put("screenobjects", ops);
-
-        Gson gson = new Gson();
-
-        String output = gson.toJson(screen);
-
-        return output;
+    private void create(String namespace, String itemName, String value, Map<String, Object> configuration) {
+        MetadataKey metadataKey = new MetadataKey(namespace, itemName);
+        metadataRegistry.remove(metadataKey);
+        metadataRegistry.add(new Metadata(metadataKey, value, configuration));
     }
 }
 ```
 
-```Shell  
-openhab> openhab:update  OutsideTemperature 27
-Update has been sent successfully.
-openhab> openhab:status EPaper_Screen_Json
-{"screenobjects":[{"x":10,"y":0,"text":"@ 2024-06-04 20:07:42","type":"text"},{"x":10,"y":30,"text":"Temp Outside: 27.0","type":"text"}]}
-```
-  
-## Groovy Port
+Tip : The metadataRegistry is already declared as a field in the Java223Script helper class that you can inherit.
 
-This class is ported from the [openHAB JSR 223 Groovy Sample](https://www.openhab.org/docs/configuration/jsr223.html#groovy).
-It does not use syntactic sugar of the Script base class, only pure openHAB JSR 223.
 
-```java
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+<a id="injectbinding"></a>
 
-import org.openhab.automation.java223.scriptsupport.Script;
-import org.openhab.core.automation.Action;
-import org.openhab.core.automation.Trigger;
-import org.openhab.core.automation.module.script.rulesupport.shared.simple.SimpleRule;
-import org.openhab.core.automation.util.TriggerBuilder;
-import org.openhab.core.config.core.Configuration;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+## Advanced injection control
 
-/*
- * @author weberjn
- */
-public class GroovyPort extends Script {
+Control automatic injection behavior by using the `@InjectBinding` annotation. You can use it on field or on method/constructor parameter.
 
-    private Logger logger = LoggerFactory.getLogger("org.openhab.automation.java223.script");
+```java 
+public class InjectBindingExample {
 
-    public int counter = 1;
+    // inject something from a preset :
+    protected @InjectBinding(preset = "RuleSupport", named = "automationManager") ScriptedAutomationManager automationManager;
+    // disable injection even if the field name should trigger it :
+    protected @InjectBinding(enable = "false") ItemRegistry itemRegistry;
+    // name your variable as you wish :
+    protected @InjectBinding(named = "itemRegistry") ItemRegistry otherVariableName;
+    // make it mandatory (the script will not run if the value cannot be found). Note : mandatory = true is the default value when using the annotation.
+    protected @InjectBinding(mandatory = true) ThingRegistry things;
+    
+    public SimpleClass(ItemRegistry itemRegistry) {
+        this.myItemRegistry = itemRegistry;
+    }
 
-    protected Object onLoad() {
-
-        SimpleRule sr = new SimpleRule() {
-
-            @Override
-            public Object execute(Action module, Map<String, ?> inputs) {
-
-                logger.info("Java execute {},  inputs: {} ", counter++, inputs);
-
-                return "";
-            }
-        };
-
-        sr.setName("Java-One");
-
-        List<Trigger> triggers = new ArrayList<Trigger>(1);
-
-        Map<String, Object> triggerConf = new HashMap<String, Object>();
-        triggerConf.put("cronExpression", "0 * * * * ?");
-
-        Trigger trigger = TriggerBuilder.create().withId("aTimerTrigger").withTypeUID("timer.GenericCronTrigger")
-                .withConfiguration(new Configuration(triggerConf)).build();
-
-        triggers.add(trigger);
-
-        sr.setTriggers(triggers);
-
-        automationManager.addRule(sr);
-
-        logger.info("onLoad() done");
-        
-        return null;
+    public void main(ItemRegistry itemRegistry) {
+        myItemRegistry.get("myitem");
     }
 }
 ```
 
-## Library example
+<a id="libraryautoinjection"></a>
 
-Define a library class :
+## Library use and auto injection
 
-```java
-import org.openhab.automation.java223.annotations.Library;
-import org.openhab.automation.java223.scriptsupport.Script;
-
-@Library
-public class MyLib extends Script {
-
-    public static void sayStaticHello() {
-        logger.info("Static Hello word");
-    }
-
-    public void sayHello() {
-        logger.info("Hello word");
-    }
-}```
-
-Use it in another script, either in a static way or with an injection :
+Inside the `automation/lib/java` directory, let's define a library that will be available to all scripts.
 
 ```java
-import org.openhab.automation.java223.scriptsupport.Script;
+import ...;
 
-public class UseLib extends Script {
+public class MyGreatLibrary {
+    ItemRegistry itemRegistry; // will be auto-injected if instantiation is taken care of by the bundle
 
-    @org.openhab.automation.java223.annotations.Library
-    MyLib mylib;
-
-    @Override
-    public Object onLoad() {
-        mylib.sayHello();
-        MyLib.sayStaticHello();
-        return null;
+    public void myUsefullLibraryMethod(String itemName) {
+        itemRegistry.get(itemName);
+        //something usefull...
     }
 }
 ```
 
-## Raw script
-
-You can use a raw script to avoid writing boilerplate code.
-Within it, you can use import, package declaration.
-You can return a value (optional).
+Here is how to use it with auto injection your script (in automation/jsr223/), for example with field injection :
 
 ```java
-import java.util.UUID;
+import ...;
 
-UUID uuid = UUID.randomUUID();
-return uuid.toString();
+public class MyScript {
+
+    MyGreatLibrary mylib; // will be auto instantiated and then auto injected with all needed OpenHAB input value
+
+    public void exec() {
+        mylib.myUsefullLibraryMethod("myitemName");
+    }
+}
+```
+
+<a id="itemsandthings"></a>
+
+Tip : do not forget that all classes, including libraries, can extend Java223Script
+
+## Items and Things helper libraries
+
+```java
+import ...;
+
+public class ItemsAndThingAccessExample extends Java223Script { // <-- take the Java223Script class as a base class
+                                                                // to access _items and _things more easily
+
+    public void exec() {
+        _items.myLightItem().send(OnOffType.ON); // <-- light on !
+        logger.info(_things.zwave_device_2ecfa3a2_node68().getStatus().toString()); // <-- get thing info
+    }
+}
+```
+
+<a id="actions"></a>
+
+## Actions helper libraries
+
+With the auto generated `Actions` class (here referenced by the `_action` variable), you can call a method to get strongly typed actions linked to your Thing.
+
+```java
+import ...;
+
+public class ActionExample extends Java223Script { // <-- take the Java223Script class as a base class
+                                                   // to access _actions more easily
+
+    public void exec() {
+        _actions.getSmsmodem_SMSModemActions(Things.mySMSthing).sendSMS("+3312345678", "Hello world");;
+    }
+}
 ```
 

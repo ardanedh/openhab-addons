@@ -21,12 +21,16 @@ import java.lang.annotation.Target;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 
 /**
- * Mark method to be run by the java223 script engine
+ * Mark a class candidate for a singleton instantiation.
+ * The java223 module will try to use an already created instance
+ * instead of creating one on each execution.
+ * The instance will be searched in the cache.
  *
  * @author Gwendal Roulleau - Initial contribution
  */
 @Retention(RUNTIME)
-@Target({ ElementType.METHOD })
+@Target({ ElementType.TYPE })
 @NonNullByDefault
-public @interface RunScript {
+public @interface ReuseScriptInstance {
+    boolean value() default true;
 }

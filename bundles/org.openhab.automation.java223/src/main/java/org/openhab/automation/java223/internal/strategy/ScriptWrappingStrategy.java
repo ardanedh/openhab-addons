@@ -22,7 +22,7 @@ import org.eclipse.jdt.annotation.Nullable;
 import ch.obermuhlner.scriptengine.java.compilation.ScriptInterceptorStrategy;
 
 /**
- * Wrapps a script in boilerplate code if not present.
+ * Wraps a script in boilerplate code if not present.
  * Must respect some conditions to be wrapped correctly:
  * - must not contains "public class"
  * - line containing import must start with "import "
@@ -40,6 +40,22 @@ public class ScriptWrappingStrategy implements ScriptInterceptorStrategy {
 
     private static String BOILERPLATE_CODE_BEFORE = """
             import helper.generated.Java223Script;
+            import org.openhab.core.library.items.*;
+            import org.openhab.core.library.types.*;
+            import org.openhab.core.library.types.HSBType.*;
+            import org.openhab.core.library.types.IncreaseDecreaseType.*;
+            import org.openhab.core.library.types.NextPreviousType.*;
+            import org.openhab.core.library.types.OnOffType.*;
+            import org.openhab.core.library.types.OpenClosedType.*;
+            import org.openhab.core.library.types.PercentType.*;
+            import org.openhab.core.library.types.PlayPauseType.*;
+            import org.openhab.core.library.types.PointType.*;
+            import org.openhab.core.library.types.QuantityType.*;
+            import org.openhab.core.library.types.RewindFastforwardType.*;
+            import org.openhab.core.library.types.StopMoveType.*;
+            import org.openhab.core.library.types.UpDownType.*;
+
+
             public class WrappedJavaScript extends Java223Script {
                 public Object main() {
             """;
@@ -51,6 +67,7 @@ public class ScriptWrappingStrategy implements ScriptInterceptorStrategy {
 
     @Override
     public @Nullable String intercept(@Nullable String script) {
+
         if (script == null) {
             return "";
         }
@@ -61,6 +78,7 @@ public class ScriptWrappingStrategy implements ScriptInterceptorStrategy {
         List<String> scriptLines = new ArrayList<>(lines.size());
         boolean returnIsPresent = false;
 
+        // parse the file and sort lines in different categories
         for (String line : lines) {
             line = line.trim();
             if (NAME_PATTERN.matcher(line).matches()) { // a class declaration is found. No need to wrap
@@ -78,6 +96,7 @@ public class ScriptWrappingStrategy implements ScriptInterceptorStrategy {
             }
         }
 
+        // recompose a complete script with the different parts
         StringBuilder modifiedScript = new StringBuilder();
         modifiedScript.append(packageDeclarationLine + "\n");
         modifiedScript.append(String.join("\n", importLines));

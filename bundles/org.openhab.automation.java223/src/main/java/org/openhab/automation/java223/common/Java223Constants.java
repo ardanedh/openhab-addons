@@ -18,7 +18,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.openhab.core.OpenHAB;
 
 /**
- * Constant class file.
+ * Constants.
  *
  * @author Gwendal Roulleau - initial contribution
  *
@@ -30,6 +30,7 @@ public class Java223Constants {
     public static final String JAR_FILE_TYPE = "jar";
     public static final String METADATA_REGISTRY = "metadataRegistry";
     public static final String RULE_MANAGER = "ruleManager";
+    public static final String THING_MANAGER = "thingManager";
 
     public static final String ANNOTATION_DEFAULT = "\u0002\u0003";
 
